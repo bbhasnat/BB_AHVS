@@ -1114,30 +1114,19 @@ AHVS already has a strong generic execution contract: repo + baseline metric + `
 #### Execution scalability
 
 1. **Parallel hypothesis execution**
-   Hypotheses currently run sequentially. Parallel execution is feasible, but it needs two fixes first.
-2. **Run Claude Code inside per-hypothesis worktrees**
-   Two concurrent Claude Code processes should not edit the shared main repo. The clean fix is to create worktrees first and run each hypothesis agent inside its own worktree.
-3. **Add locking around `git worktree add/remove`**
-   Worktree operations are not atomic. Add a file lock such as `fcntl.flock` around create/remove operations to avoid metadata corruption.
-4. **Improve unattended throughput**
+   Hypotheses currently run sequentially. Parallel execution is feasible — Claude Code already runs inside per-hypothesis worktrees (done), so two remaining items are needed:
+   - Add `fcntl.flock` around `git worktree add/remove` to prevent metadata corruption
+   - Use `concurrent.futures` or `asyncio.gather` over the hypothesis list
+2. **Improve unattended throughput**
    `save_results` already supports merge-by-ID accumulation, so batch and unattended execution should benefit once parallelism is in place. Multi-agent supervised mode benefits less because the observer verifies between hypotheses.
 
 #### Domain expansion
 
-1. **Formalize a real domain-adapter boundary**
-   Introduce a first-class adapter/plugin interface for domain-specific hypothesis generation hints, validation rules, success criteria, and optional tool checks. This replaces the current implicit coupling through prompt text and built-in hypothesis labels.
-2. **Split generic hypothesis types from domain-specific packs**
-   Keep core types such as `config_change`, `code_change`, and `architecture_change` in the base system, and move LLM-specific types such as `prompt_rewrite`, `model_comparison`, `dspy_optimize`, and `multi_llm_judge` into an LLM/RAG domain pack.
-3. **Add an ML text-classifier domain pack**
-   Provide classifier-oriented prompts, examples, and skills for common levers such as threshold calibration, class weighting, preprocessing/tokenization, sampling, loss changes, model-head changes, and training/inference pipeline improvements.
-4. **Generalize success criteria beyond single LLM-style metrics**
-   Preserve the current primary-metric contract, but improve first-class support for regression floors and multi-metric objectives such as `macro_f1`, precision/recall tradeoffs, calibration error, latency, and training cost.
-5. **Promote custom skills into domain-scoped libraries**
-   Make it easy to register reusable skill bundles for classifier training/eval, benchmark runners, ablation scripts, and algorithmic pipelines instead of assuming Promptfoo/DSPy-style tooling is the main path.
-6. **Broaden docs and onboarding examples**
-   Add end-to-end examples for non-RAG repos, especially text classification and general algorithmic optimization tasks, so users can onboard those targets without translating from answer-relevance/RAG examples.
+The `--domain` flag and YAML-based domain packs (`ahvs/domain_packs/`) provide the adapter mechanism. The ML domain pack (`--domain ml`) is shipped. Remaining work:
 
-Near-term recommendation: treat AHVS as LLM/RAG-first in its built-in defaults, while evolving the adapter layer so repeated use on classifiers and other algorithmic repos becomes a clean extension rather than a prompt-level workaround.
+1. **Add more domain packs** — e.g., `nlp` (NER, summarization, translation), `cv` (image classification, object detection), `timeseries` (forecasting, anomaly detection)
+2. **Multi-metric optimization** — Preserve the current primary-metric contract, but add first-class support for Pareto-optimal selection across multiple metrics (e.g., precision *and* recall, accuracy *and* latency)
+3. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression) so users can see the full onboarding → cycle → results flow
 
 ### Browser-based hypothesis selector
 
