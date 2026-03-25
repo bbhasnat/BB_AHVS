@@ -11,7 +11,7 @@ to "fix" them or classify them as FRAMEWORK_BUG.
 
 ### Forbidden file filter
 
-The framework blocks CodeAgent from modifying eval-harness entry points.
+The framework blocks Claude Code from modifying eval-harness entry points.
 When you see `[AHVS] blocked N forbidden file(s)` in the logs, this is
 intentional protection working correctly.
 
@@ -23,30 +23,29 @@ intentional protection working correctly.
 | `__init__.py` | Warn-only (applied) | May be legitimate, logged for review |
 | `main.py` | Warn-only (applied) | May be legitimate, logged for review |
 
-If CodeAgent's only meaningful change was in a blocked file, the hypothesis
+If Claude Code's only meaningful change was in a blocked file, the hypothesis
 will produce zero valid files and score `extraction_failed`. This is a
 **HYPOTHESIS_MISS** — the hypothesis strategy was incompatible with the
 framework's safety constraints.
 
 ### Pre-eval import sanity check
 
-After applying CodeAgent's files to the worktree, the framework verifies
+After applying Claude Code's files to the worktree, the framework verifies
 the eval module can still import. When you see `pre-eval import check FAILED`
-in the logs, it means CodeAgent broke the module structure (circular imports,
+in the logs, it means Claude Code broke the module structure (circular imports,
 missing dependencies, syntax errors in spliced code).
 
-This is a **HYPOTHESIS_MISS** — CodeAgent produced code that broke the
+This is a **HYPOTHESIS_MISS** — Claude Code produced code that broke the
 target repo's import chain. Do not classify as FRAMEWORK_BUG.
 
 ### Authoritative eval policy
 
 When `eval_command` is configured, it is the **only trusted measurement
-source**. Sandbox self-reports (result.json written by CodeAgent, best_metrics,
-best_stdout) are unconditionally skipped. This prevents fabricated metrics.
+source**. Self-reported result.json files are skipped when eval_command is
+configured. This prevents fabricated metrics.
 
 When you see `extraction_failed` with a configured `eval_command`, it means
-the real eval didn't produce a parseable metric. Do not look for the metric
-in sandbox artifacts — they were intentionally skipped.
+the real eval didn't produce a parseable metric.
 
 ### Stale worktree cleanup
 
@@ -81,7 +80,7 @@ to give the hypothesis a fair chance. The hypothesis idea was valid but the
 framework set it up to fail.
 
 **Indicators — these are missing-guardrail issues:**
-- CodeAgent writes files to repo root (e.g., `parsing.py`) when source code
+- Claude Code writes files to repo root (e.g., `parsing.py`) when source code
   lives under a subdirectory (e.g., `src/autoqa/parsing.py`) — the framework
   did not inject the source directory path or enforce correct paths
 - `prompt_rewrite` hypothesis generated when `eval_command` uses `--eval-only`
@@ -96,23 +95,23 @@ framework set it up to fail.
 
 | Question | If YES → | If NO → |
 |---|---|---|
-| Did the framework tell CodeAgent the correct source directory? | HYPOTHESIS_MISS | FRAMEWORK_BUG (missing guardrail) |
+| Did the framework tell Claude Code the correct source directory? | HYPOTHESIS_MISS | FRAMEWORK_BUG (missing guardrail) |
 | Did the framework filter out unmeasurable hypothesis types? | HYPOTHESIS_MISS | FRAMEWORK_BUG (missing guardrail) |
 | Did the hypothesis gen prompt include the repo file tree? | HYPOTHESIS_MISS | FRAMEWORK_BUG (missing guardrail) |
-| Was the CodeAgent given adequate context to place files correctly? | HYPOTHESIS_MISS | FRAMEWORK_BUG (missing guardrail) |
+| Was the Claude Code given adequate context to place files correctly? | HYPOTHESIS_MISS | FRAMEWORK_BUG (missing guardrail) |
 
 **Key insight:** If the framework had a guardrail that SHOULD exist but DOESN'T,
 and that missing guardrail caused the failure, it's a FRAMEWORK_BUG — even though
-the error manifests in CodeAgent output, not in `ahvs/` stack traces.
+the error manifests in Claude Code output, not in `ahvs/` stack traces.
 
 **NOT a FRAMEWORK_BUG (common misclassifications):**
-- `ImportError` in the target repo after CodeAgent changes when CodeAgent was
+- `ImportError` in the target repo after Claude Code changes when Claude Code was
   given correct path context → HYPOTHESIS_MISS
 - Files blocked by forbidden file filter → HYPOTHESIS_MISS (intentional protection)
-- Pre-eval import check failure when CodeAgent had correct context → HYPOTHESIS_MISS
-- `extraction_failed` when eval_command is configured and CodeAgent had adequate
+- Pre-eval import check failure when Claude Code had correct context → HYPOTHESIS_MISS
+- `extraction_failed` when eval_command is configured and Claude Code had adequate
   context → HYPOTHESIS_MISS
-- eval_command crashes after CodeAgent rewrote a core module with correct paths
+- eval_command crashes after Claude Code rewrote a core module with correct paths
   → HYPOTHESIS_MISS
 
 **Action for Subcategory A:** Observer fixes the framework code, runs pytest
@@ -133,11 +132,11 @@ and a measurable hypothesis type — but didn't improve the metric.
 **Indicators:**
 - Metric measured but at or below baseline
 - Metric regressed (negative delta)
-- `extraction_failed` because CodeAgent broke imports despite having correct
+- `extraction_failed` because Claude Code broke imports despite having correct
   path context (pre-eval check failed)
 - `extraction_failed` because eval_command crashed on hypothesis-generated code
   that was correctly placed
-- All CodeAgent files were blocked by forbidden file filter (bad hypothesis strategy)
+- All Claude Code files were blocked by forbidden file filter (bad hypothesis strategy)
 
 **Action:** Record the lesson. Report PASS. Move on.
 

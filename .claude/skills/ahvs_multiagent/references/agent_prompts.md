@@ -103,13 +103,12 @@ features, not bugs. Do not try to "fix" or work around them:
 
 2. PRE-EVAL IMPORT CHECK: After applying files, the framework verifies the eval
    module can still import. When you see "pre-eval import check FAILED" — that
-   means CodeAgent broke the module structure. Classify as HYPOTHESIS_MISS
-   ONLY IF CodeAgent was given correct path context. If CodeAgent was NOT given
+   means Claude Code broke the module structure. Classify as HYPOTHESIS_MISS
+   ONLY IF Claude Code was given correct path context. If Claude Code was NOT given
    the source directory path, this is FRAMEWORK_BUG (missing guardrail).
 
-3. AUTHORITATIVE EVAL: When eval_command is configured, sandbox self-reports
-   (result.json from CodeAgent, best_metrics, best_stdout) are unconditionally
-   skipped. Only eval_command output is trusted. When you see extraction_failed
+3. AUTHORITATIVE EVAL: When eval_command is configured, it is the only trusted
+   measurement source. Self-reported result.json files are skipped. Only eval_command output is trusted. When you see extraction_failed
    with a configured eval_command, the sandbox metrics were correctly ignored.
 
 FAILURE CLASSIFICATION — every result falls into exactly one category:
@@ -126,7 +125,7 @@ FRAMEWORK_BUG (Subcategory B — missing guardrails):
   framework set it up to fail.
 
   Symptoms:
-  - CodeAgent wrote files to repo root (e.g., parsing.py, main.py) when source
+  - Claude Code wrote files to repo root (e.g., parsing.py, main.py) when source
     code lives under a subdirectory (e.g., src/autoqa/). Check: does the
     executor.py repo grounding section dynamically detect and inject the source
     directory? If not → missing guardrail.
@@ -164,7 +163,7 @@ HYPOTHESIS_MISS:
   The hypothesis was given a fair chance — adequate context, correct paths,
   measurable type — but didn't improve the metric.
   Symptoms: Metric at or below baseline, metric regressed, extraction_failed
-  because CodeAgent broke imports despite having correct path context,
+  because Claude Code broke imports despite having correct path context,
   eval_command crashed on correctly-placed hypothesis code
   Action: Record lesson, report PASS — this is expected and valuable
 

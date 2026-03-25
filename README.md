@@ -41,7 +41,7 @@ Given a target repository and a single question — *"How can we improve answer\
 2. Asks an LLM to generate concrete, typed hypotheses
 3. Pauses for a human (or runs non-interactively) to select which to test
 4. Builds a detailed implementation + evaluation plan per hypothesis
-5. Invokes **CodeAgent** to implement each hypothesis, applies the generated files to a **git worktree** of the target repo, and runs the `eval_command` against it
+5. Invokes **Claude Code** to implement each hypothesis, applies the generated files to a **git worktree** of the target repo, and runs the `eval_command` against it
 6. Writes a cycle report and archives every lesson into the **EvolutionStore**
 7. Produces a `cycle_summary.json` with a clear keep/revert recommendation and the path to the kept worktree/patch
 
@@ -55,23 +55,18 @@ AHVS is a self-contained package with no external framework dependencies. Its co
 
 | Component | Module | Purpose |
 |-----------|--------|---------|
-| **CodeAgent** | `ahvs.code_agent` | Implements and executes hypotheses via Claude Code CLI or sandbox |
+| **Claude Code** | `ahvs.executor` | Implements hypotheses via Claude Code CLI (`claude -p`) |
 | **EvolutionStore** | `ahvs.evolution` | Cross-cycle memory — persists lessons across cycles |
 | **LLM Client** | `ahvs.llm` | Provider-agnostic LLM client factory (Anthropic, OpenAI, OpenRouter, DeepSeek, ACP) |
-| **ExperimentSandbox** | `ahvs.sandbox` | Isolated execution environment for sandbox-mode code generation |
-| **SandboxConfig** | `ahvs.sandbox_config` | Sandbox configuration and trust boundaries |
 | **Stage Pipeline** | `ahvs.stages`, `ahvs.executor`, `ahvs.runner` | 8-stage cycle orchestration with checkpoint/resume |
 | **Hypothesis Worktree** | `ahvs.worktree` | Git worktree lifecycle, file application, and AST-based splice |
 | **Prompt Manager** | `ahvs.prompts` | Stage prompts with YAML overrides |
 
-### Code agent: Claude Code (default) or sandbox CodeAgent
+### Code agent: Claude Code
 
-AHVS supports two code agents for hypothesis execution:
+AHVS uses Claude Code CLI (`claude -p`) as its code execution backend. It runs as a subprocess with read/edit/search tools scoped to the target repo, editing files in-place with surgical precision.
 
-- **Claude Code** (default): Runs as a CLI subprocess (`claude -p`) with read/edit/search tools scoped to the target repo. Edits files in-place with surgical precision, targeting the correct source paths.
-- **Sandbox CodeAgent** (legacy): Runs in an `ExperimentSandbox`, generates files from scratch. Use `--use-sandbox-agent` to fall back to this mode.
-
-Both agents receive the same context:
+Claude Code receives:
 
 - The hypothesis description and implementation plan
 - The available **skill library** (which tools exist and how to invoke them)
@@ -79,7 +74,7 @@ Both agents receive the same context:
 - Instructions that generated files will be applied to a git worktree (repo-relative paths)
 - The `eval_command` that will measure the result in the worktree
 
-Claude Code produces targeted edits to existing files (better for `code_change` hypotheses), while sandbox CodeAgent generates complete files (better for `architecture_change` hypotheses that create new modules). The generated files are then applied to a **detached git worktree** of the target repo (created at HEAD with `git worktree add --detach`), and the `eval_command` from `baseline_metric.json` is executed inside that worktree to produce a real measurement.
+The generated files are applied to a **detached git worktree** of the target repo (created at HEAD with `git worktree add --detach`), and the `eval_command` from `baseline_metric.json` is executed inside that worktree to produce a real measurement.
 
 ### Worktree execution model
 
@@ -88,13 +83,13 @@ Each hypothesis gets its own worktree under `<cycle_dir>/worktrees/<ID>/`. This 
 - **Repo-grounded execution:** Code is tested against the actual repo, not in an isolated sandbox
 - **No branch pollution:** Worktrees are detached (no branches created)
 - **Safe concurrency:** Each hypothesis has its own copy of the repo (note: parallel execution is not yet supported — see [Parallel execution](#parallel-hypothesis-execution-future-work) for status)
-- **Path containment:** All CodeAgent-generated file paths are validated by a shared `validate_safe_relpath()` utility before writing — to both `tool_runs/` and worktree directories. Absolute paths, `..` traversal, and symlink escapes are rejected. The containment check uses `Path.is_relative_to()` (not string-prefix matching) to prevent false-positive bypasses
+- **Path containment:** All generated file paths are validated by a shared `validate_safe_relpath()` utility before writing — to both `tool_runs/` and worktree directories. Absolute paths, `..` traversal, and symlink escapes are rejected. The containment check uses `Path.is_relative_to()` (not string-prefix matching) to prevent false-positive bypasses
 - **Audit trail:** A `.patch` file is saved for every hypothesis
-- **Smart merging:** When CodeAgent produces partial file output (only some functions), AST-based `splice_functions` merges changes into the existing file rather than overwriting it — preserving untouched code, replacing modified definitions, and appending new ones
+- **Smart merging:** When Claude Code produces partial file output (only some functions), AST-based `splice_functions` merges changes into the existing file rather than overwriting it — preserving untouched code, replacing modified definitions, and appending new ones
 
 After all hypotheses run, AHVS identifies the best improvement and keeps its worktree. All other worktrees are cleaned up. The kept worktree path and all patch paths are recorded in `cycle_summary.json`.
 
-If the target path is not a git repository, worktree creation fails and the hypothesis is marked as an error. Pass `--allow-sandbox-only` to permit sandbox-only fallback for non-git targets (see [Execution modes](#execution-modes)).
+If the target path is not a git repository, worktree creation fails and the hypothesis is marked as an error. Pass `--allow-sandbox-only` to permit graceful degradation for non-git targets (see [Execution modes](#execution-modes)).
 
 ---
 
@@ -106,7 +101,7 @@ Stage 2  AHVS_CONTEXT_LOAD     Load baseline + enriched context + EvolutionStore
 Stage 3  AHVS_HYPOTHESIS_GEN   LLM generates 1-5 typed hypotheses
 Stage 4  AHVS_HUMAN_SELECTION  -- GATE -- operator selects which to run
 Stage 5  AHVS_VALIDATION_PLAN  LLM writes per-hypothesis implementation plan
-Stage 6  AHVS_EXECUTION        CodeAgent executes each hypothesis; worktree + eval_command
+Stage 6  AHVS_EXECUTION        Claude Code executes each hypothesis; worktree + eval_command
 Stage 7  AHVS_REPORT_MEMORY    LLM writes cycle report; lessons -> EvolutionStore
 Stage 8  AHVS_CYCLE_VERIFY     Validate all artifacts; write cycle_summary.json
 ```
@@ -405,7 +400,7 @@ Enriched fields (optional but strongly recommended — improves hypothesis quali
 
 ### 6.2 Evaluation setup
 
-Your `eval_command` is **executed in a git worktree** of the target repo after CodeAgent's generated files are applied. It must be reproducible and must write a numeric result that can be parsed.
+Your `eval_command` is **executed in a git worktree** of the target repo after Claude Code's generated files are applied. It must be reproducible and must write a numeric result that can be parsed.
 
 AHVS extracts metrics using a two-path strategy depending on whether `eval_command` is configured:
 
@@ -414,21 +409,16 @@ AHVS extracts metrics using a two-path strategy depending on whether `eval_comma
 | Tier | Source | Behavior |
 |---|---|---|
 | **0** | `eval_command` stdout (run in worktree) | **Only trusted source.** Metric parsed from stdout. |
-| — | Sandbox self-reports (result.json, best_metrics, best_stdout) | **Unconditionally skipped.** CodeAgent can fabricate metrics — only the real eval pipeline is trusted. |
 | — | `extraction_failed` | eval_command did not produce a valid metric |
 
-This is the authoritative-eval policy: when `eval_command` exists, it is the single source of truth. Sandbox self-reports are never used, regardless of whether eval succeeds or fails. This prevents false metrics (e.g. CodeAgent writing a fabricated `result.json` with `precision: 0.99` while the actual eval crashes).
+This is the authoritative-eval policy: when `eval_command` exists, it is the single source of truth.
 
-**When `eval_command` is empty or missing (legacy/sandbox-only mode):**
+**When `eval_command` is empty or missing:**
 
 | Tier | Source | When used |
 |---|---|---|
-| 1 | `result.json` in work_dir or `agent_runs/*/` | Sandbox copy-back |
-| 2 | `CodeAgentResult.best_metrics` | Parsed from sandbox stdout |
-| 3 | `CodeAgentResult.best_stdout` | Raw `key: value` patterns |
-| 4 | `extraction_failed` | All tiers failed — hypothesis is treated as **failed** |
-
-This mode is backward compatible with repos that don't have an `eval_command`.
+| 1 | `result.json` in work_dir or `agent_runs/*/` | Fallback metric source |
+| 2 | `extraction_failed` | No valid metric found — hypothesis is treated as **failed** |
 
 **Important:** A hypothesis with `measurement_status="extraction_failed"` is treated as an invalid experiment — it cannot count as "improved" even if the baseline value happens to produce `delta > 0`. If *all* hypotheses in a cycle fail measurement, Stage 8 marks the entire cycle as **FAILED** with an "INVALID CYCLE" recommendation.
 
@@ -538,7 +528,7 @@ ahvs \
 
 ## 8. Hypothesis Types
 
-AHVS generates hypotheses of these types. Each type controls what instructions, constraints, and package hints CodeAgent receives:
+AHVS generates hypotheses of these types. Each type controls what instructions, constraints, and package hints Claude Code receives:
 
 | Type | Focus area | Required tools |
 |---|---|---|
@@ -546,21 +536,21 @@ AHVS generates hypotheses of these types. Each type controls what instructions, 
 | `model_comparison` | Swap model IDs, compare across providers | `promptfoo` |
 | `config_change` | Hyperparameters (temperature, chunk_size, top_k) | `promptfoo` |
 | `dspy_optimize` | DSPy modules for programmatic prompt optimization | `dspy`, `promptfoo` |
-| `code_change` | Algorithms, retrieval logic, ranking functions, data processing | *(none — uses local sandbox)* |
-| `architecture_change` | Pipeline redesign, new components, caching, re-rankers | *(none — uses local sandbox)* |
-| `multi_llm_judge` | Multi-model consensus or judge-based evaluation | *(none — uses local sandbox)* |
+| `code_change` | Algorithms, retrieval logic, ranking functions, data processing | *(none)* |
+| `architecture_change` | Pipeline redesign, new components, caching, re-rankers | *(none)* |
+| `multi_llm_judge` | Multi-model consensus or judge-based evaluation | *(none)* |
 | `phoenix_eval` | Arize Phoenix evaluation | `arize-phoenix` |
 
 ### How types affect execution
 
-All hypothesis types share the same execution engine: **CodeAgent**. There is no separate executor per type. Instead, each type injects **type-specific execution strategies** (defined in `_TYPE_EXECUTION_STRATEGIES` in `executor.py`) that shape CodeAgent's behaviour:
+All hypothesis types share the same execution engine: **Claude Code CLI**. There is no separate executor per type. Instead, each type injects **type-specific execution strategies** (defined in `_TYPE_EXECUTION_STRATEGIES` in `executor.py`) that shape Claude Code's behaviour:
 
-- **System instructions** — type-specific guidance appended to CodeAgent's system prompt (e.g., `code_change` is told to focus on algorithms and retrieval logic, not prompt wording)
+- **System instructions** — type-specific guidance appended to the prompt (e.g., `code_change` is told to focus on algorithms and retrieval logic, not prompt wording)
 - **Constraints** — hard boundaries on what the type may modify (e.g., `prompt_rewrite` is scoped to prompt template files only)
 - **Success guidance** — how to measure whether the change achieved its goal
 - **Package hints** — which pip packages and tools to prefer
 
-This means the taxonomy controls *what CodeAgent is instructed to do*, not *which runtime engine runs*. A `code_change` hypothesis produces genuinely different code than a `prompt_rewrite` because CodeAgent receives different instructions, constraints, and success criteria — but both flow through the same `CodeAgent.generate()` call.
+This means the taxonomy controls *what Claude Code is instructed to do*, not *which runtime engine runs*. A `code_change` hypothesis produces genuinely different code than a `prompt_rewrite` because Claude Code receives different instructions, constraints, and success criteria.
 
 ### Pre-flight tool checks
 
@@ -570,7 +560,7 @@ AHVS runs a secondary pre-flight check *after* hypothesis selection (Stage 4) to
 
 ## 9. Skill Library
 
-Skills are pre-built guidance templates injected into CodeAgent's prompt context. CodeAgent reads them, picks the right approach for the hypothesis type, and invokes the underlying tools directly in its generated code. Skills are **purely advisory** — they describe what tools are available and how to use them, but AHVS does not enforce, dispatch, or resolve skill invocations at runtime. The `skill_planned` field in `HypothesisResult` reflects the plan's declared skill, not a runtime observation.
+Skills are pre-built guidance templates injected into Claude Code's prompt context. Claude Code reads them, picks the right approach for the hypothesis type, and invokes the underlying tools directly in its generated code. Skills are **purely advisory** — they describe what tools are available and how to use them, but AHVS does not enforce, dispatch, or resolve skill invocations at runtime. The `skill_planned` field in `HypothesisResult` reflects the plan's declared skill, not a runtime observation.
 
 ### Built-in skills
 
@@ -722,16 +712,16 @@ Each `HypothesisResult` includes a `measurement_status` field that tracks whethe
 |---|---|
 | `"measured"` | Metric was successfully extracted from at least one source |
 | `"extraction_failed"` | Hypothesis ran but no metric could be parsed from any source — treated as a **failed** hypothesis (cannot count as improved) |
-| `"sandbox_error"` | CodeAgent execution raised an exception before metric extraction |
+| `"sandbox_error"` | Hypothesis execution raised an exception before metric extraction |
 | `"not_executed"` | Hypothesis was not executed (default state) |
 
 **Metric extraction policy** (see [Section 6.2](#62-eval-command) for full details):
 
-When `eval_command` is configured, it is the **only trusted measurement source** — sandbox self-reports (result.json, CodeAgent stdout) are unconditionally skipped to prevent fabricated metrics. When `eval_command` is not configured, AHVS falls back to sandbox-based extraction (result.json -> best_metrics -> best_stdout). If no source produces a valid metric, `measurement_status` is set to `"extraction_failed"`.
+When `eval_command` is configured, it is the **only trusted measurement source**. When `eval_command` is not configured, AHVS falls back to `result.json` in the work directory. If no source produces a valid metric, `measurement_status` is set to `"extraction_failed"`.
 
 **Diagnosing `extraction_failed`:**
-- Check `tool_runs/<ID>/` for generated files — did CodeAgent produce code?
-- Check `tool_runs/<ID>/agent_runs/*/` for sandbox artifacts — did the code run?
+- Check `tool_runs/<ID>/` for generated files — did Claude Code produce code?
+- Check the eval_command stderr in the logs — did the eval crash?
 - Ensure the hypothesis code writes the metric in a parseable format (JSON or `key: value`)
 
 ---
@@ -802,9 +792,6 @@ ahvs/
 ├── hypothesis_selector.py   # Browser-based GUI for human hypothesis selection
 ├── executor.py              # 8 stage handlers + execute_ahvs_stage() dispatcher
 ├── runner.py                # execute_ahvs_cycle() — outer orchestration loop
-├── code_agent.py            # CodeAgent — implements hypotheses via Claude Code or sandbox
-├── sandbox.py               # ExperimentSandbox — isolated execution environment
-├── sandbox_config.py        # Sandbox configuration and trust boundaries
 ├── evolution.py             # EvolutionStore — cross-cycle memory persistence
 ├── cli.py                   # CLI entry point (ahvs command)
 ├── llm/                     # LLM client factory
@@ -839,7 +826,7 @@ ahvs/
 ├── memory/                     # Project-specific session memory (portable across machines)
 │   ├── INDEX.md                # One-line index of all memory files
 │   ├── session_20260319.md     # Session summaries: what ran, what broke, what was learned
-│   ├── bug_sandbox_fallback.md # Bug reports with root cause and fix details
+│   ├── bug_report_example.md   # Bug reports with root cause and fix details
 │   └── ...
 └── cycles/
     └── 20260318_120000/         # One directory per cycle run
@@ -857,7 +844,7 @@ ahvs/
         ├── worktrees/
         │   └── H1/                   # Git worktree for hypothesis H1 (kept if best)
         └── tool_runs/
-            ├── H1/                   # CodeAgent workspace for hypothesis H1
+            ├── H1/                   # Claude Code workspace for hypothesis H1
             │   ├── result.json       # Canonical metric result (written after any-tier extraction)
             │   ├── H1.patch          # Diff of all changes applied to worktree
             │   └── <generated files>
@@ -924,11 +911,11 @@ ahvs \
   --api-key-env OPENROUTER_API_KEY
 ```
 
-### Inspecting what CodeAgent generated
+### Inspecting what Claude Code generated
 
 Every hypothesis has its own workspace under `tool_runs/<ID>/`. You can inspect:
 
-- The files CodeAgent generated
+- The files Claude Code generated
 - `result.json` — the numeric metric output
 - Any intermediate artifacts from Promptfoo/DSPy/custom scripts
 
@@ -969,9 +956,9 @@ After manual application, update the baseline yourself or let `--apply-best` han
 
 ### Execution modes
 
-By default, AHVS requires repo-grounded execution via git worktrees. If a worktree cannot be created (e.g. non-git target), the hypothesis **fails** rather than silently falling back to sandbox-only mode. This ensures cycle results are always comparable and reproducible.
+By default, AHVS requires repo-grounded execution via git worktrees. If a worktree cannot be created (e.g. non-git target), the hypothesis **fails**. This ensures cycle results are always comparable and reproducible.
 
-To permit sandbox-only fallback for non-git directories or single-file projects, pass `--allow-sandbox-only`. Results from sandbox-only execution are stamped with `execution_mode: "sandbox_only"` in `results.json` and `per_hypothesis` in `cycle_summary.json`.
+To permit graceful degradation for non-git directories, pass `--allow-sandbox-only`. When worktree creation fails with this flag, the hypothesis runs without a worktree — files are generated but eval_command cannot be run in isolation. Results are stamped with `execution_mode: "sandbox_only"` in `results.json` and `per_hypothesis` in `cycle_summary.json`.
 
 ### Model selection strategy
 
@@ -980,8 +967,8 @@ AHVS makes LLM calls at three points in the cycle, each with different quality r
 | Call site | What it does | Model recommendation |
 |-----------|-------------|---------------------|
 | **Hypothesis generation** (Stage 3) | Proposes concrete, diverse improvement strategies | Use the **strongest reasoning model** available (e.g. `claude-opus-4-6`, `o3`). This is the highest-leverage call — a weak model here produces shallow, repetitive hypotheses that waste the entire cycle budget. |
-| **Validation planning** (Stage 5) | Writes implementation steps and eval criteria | Same strong model. The plan quality directly determines whether CodeAgent produces useful code. |
-| **CodeAgent execution** (Stage 6) | Generates and runs implementation code | Strong model again. This is where real code is written — algorithms, retrieval pipelines, evaluation harnesses. A capable coding model produces implementations that actually test the hypothesis rather than trivial wrappers. |
+| **Validation planning** (Stage 5) | Writes implementation steps and eval criteria | Same strong model. The plan quality directly determines whether Claude Code produces useful code. |
+| **Claude Code execution** (Stage 6) | Generates and runs implementation code | Strong model again. This is where real code is written — algorithms, retrieval pipelines, evaluation harnesses. A capable coding model produces implementations that actually test the hypothesis rather than trivial wrappers. |
 | **Report writing** (Stage 7) | Summarizes results and extracts lessons | A lighter model is acceptable here (e.g. `claude-sonnet-4-6`, `gpt-4o-mini`) since it only summarizes data that already exists. |
 
 **The general principle:** Invest in intelligence where it has multiplicative impact — hypothesis quality and code quality compound across cycles. A single good hypothesis from a strong model is worth more than five shallow ones from a cheap model.
@@ -996,14 +983,14 @@ Before running AHVS cycles, estimate your costs:
 |-----------|------------|-------|
 | Hypothesis generation | ~2K input + ~2K output | One LLM call |
 | Validation planning | ~3K input + ~2.5K output | One LLM call |
-| CodeAgent execution | ~10-50K per hypothesis | Depends on complexity; `code_change` and `architecture_change` types use more tokens than `prompt_rewrite` |
+| Claude Code execution | ~10-50K per hypothesis | Depends on complexity; `code_change` and `architecture_change` types use more tokens than `prompt_rewrite` |
 | Report writing | ~3K input + ~1.5K output | One LLM call |
 | **Total per cycle** | **~20-70K tokens** (with 2-3 hypotheses) | |
 
 **Cost control levers:**
 
 - `--max-hypotheses 1-2` for exploratory cycles; save `3-5` for when you have high-confidence directions
-- Start with `prompt_rewrite` and `config_change` hypotheses (cheaper, faster) before moving to `code_change` and `architecture_change` (more tokens, longer sandbox runs)
+- Start with `prompt_rewrite` and `config_change` hypotheses (cheaper, faster) before moving to `code_change` and `architecture_change` (more tokens, longer runs)
 - Use `--auto-approve` carefully — unattended cycles with 5 hypotheses can accumulate cost without human judgment on which ideas are worth testing
 - Set up a regression guard early — it prevents wasted cycles on regressions before you inspect results
 
@@ -1022,7 +1009,7 @@ A typical improvement campaign runs 5-10 cycles. Budget accordingly — with a s
 - Keep `--question` specific and metric-anchored: *"Improve answer\_relevance from 0.74 to above 0.78 by improving the retrieval step"* generates better hypotheses than *"make the system better"*.
 - Use `--max-hypotheses 2` for faster cycles during exploration; increase to 5 when you want broader coverage.
 - The `--auto-approve` flag is safe for unattended runs but be sure your regression guard is set up — it prevents a bad hypothesis from being silently "improved".
-- Reference concrete code paths in your question when possible: *"The chunking in `src/pipeline/splitter.py` uses fixed 512-token windows — can we improve answer\_relevance by switching to semantic chunking?"* gives CodeAgent much better starting context.
+- Reference concrete code paths in your question when possible: *"The chunking in `src/pipeline/splitter.py` uses fixed 512-token windows — can we improve answer\_relevance by switching to semantic chunking?"* gives Claude Code much better starting context.
 
 ### Multi-agent execution with Claude Code Agent Teams
 
@@ -1104,7 +1091,7 @@ selected_ids = run_selector(Path("path/to/cycle_dir"))
 
 ### AST-based partial output merging (splice_functions)
 
-When CodeAgent produces a partial file (containing only some functions from an existing file), AHVS uses AST-based merging (`splice_functions` in `worktree.py`) rather than naive overwrite. This:
+When Claude Code produces a partial file (containing only some functions from an existing file), AHVS uses AST-based merging (`splice_functions` in `worktree.py`) rather than naive overwrite. This:
 
 - **Replaces** matching function/class definitions with the new versions
 - **Appends** genuinely new definitions
@@ -1123,18 +1110,18 @@ The following framework bugs have been identified and fixed across recent sessio
 | **B** | `--reparse` flag needed for eval-only re-derivation of parsed fields | `5a546d8` (target repo) |
 | **C** | `create()` and `run_eval_command()` silently failed on missing `eval_cwd` | `495c549` |
 | **D** | Executor's `_extract_public_api` was not preserving function signatures | `db53793` |
-| **E** | Naive file overwrite destroyed existing code when CodeAgent returned partial output | `db53793` |
+| **E** | Naive file overwrite destroyed existing code when Claude Code returned partial output | `db53793` |
 | **F** | Cross-cycle memory stage-name mismatch: wrote `ahvs_execution`, queried `ahvs_hypothesis_gen` | `d362902` |
 | **G** | Enriched onboarding fields (`optimization_goal`, etc.) not forwarded to hypothesis prompt | `d362902` |
 | **H** | Hypothesis parsing relied solely on markdown/regex — fragile with LLM output variation | `d362902` |
 | **I** | Skill context block claimed runtime dispatch; module docstring said advisory-only | `d362902` |
 | **J** | `prompt_rewrite` hypotheses silently unmeasurable when eval uses `--eval-only` | `d362902` |
 | **K** | Worktree `create()` gave unclear error when `--repo` was not inside a git repository | `d362902` |
-| **L** | Framework accepted CodeAgent self-reported metrics (false 0.9928) when eval crashed | v8 fix |
+| **L** | Framework accepted Claude Code self-reported metrics (false 0.9928) when eval crashed | v8 fix |
 | **M** | Stale worktree from first run blocked reruns | v8 fix |
-| **N** | CodeAgent consistently destroys eval harness files (run_eval.py, __init__.py, main.py) | v8 fix |
+| **N** | Claude Code consistently destroys eval harness files (run_eval.py, __init__.py, main.py) | v8 fix |
 | **O** | `save_results` overwrote `results.json` on each CLI invocation — multi-agent per-hypothesis runs lost prior results | `avhs_man_llm_v2` |
-| **P** | Root-level `.py` files from CodeAgent blocked instead of auto-remapped to `src/` counterpart | `14d360f` |
+| **P** | Root-level `.py` files from Claude Code blocked instead of auto-remapped to `src/` counterpart | `14d360f` |
 
 All bugs have regression tests in `tests/test_ahvs.py`.
 
