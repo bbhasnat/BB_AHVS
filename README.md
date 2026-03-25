@@ -1153,7 +1153,9 @@ The `--domain` flag and YAML-based domain packs (`ahvs/domain_packs/`) provide t
 2. **LLM-based lesson summarization**
    Periodically consolidate clusters of related lessons into summary entries (e.g., "5 threshold-tweak hypotheses tried across cycles X-Y, max +0.8% improvement") instead of keeping every raw entry. Reduces prompt token usage while preserving signal.
 
-Near-term recommendation: treat AHVS as LLM/RAG-first in its built-in defaults, while evolving the adapter layer so repeated use on classifiers and other algorithmic repos becomes a clean extension rather than a prompt-level workaround.
+1. **Add more domain packs** — e.g., `nlp` (NER, summarization, translation), `cv` (image classification, object detection), `timeseries` (forecasting, anomaly detection)
+2. **Multi-metric optimization** — Preserve the current primary-metric contract, but add first-class support for Pareto-optimal selection across multiple metrics (e.g., precision *and* recall, accuracy *and* latency)
+3. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression) so users can see the full onboarding → cycle → results flow
 
 ### Browser-based hypothesis selector
 
