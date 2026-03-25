@@ -371,11 +371,10 @@ class _PreflightLlmShim:
 
 class _PreflightConfigShim:
     """Minimal config-shaped shim for ``create_llm_client``."""
-    __slots__ = ("llm", "metaclaw_bridge")
+    __slots__ = ("llm",)
 
     def __init__(self, llm_shim: _PreflightLlmShim) -> None:
         self.llm = llm_shim
-        self.metaclaw_bridge = None
 
 
 def _build_preflight_shim(

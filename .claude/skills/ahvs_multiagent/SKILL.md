@@ -52,7 +52,7 @@ The skill needs these values. Extract them from the user's message, CLAUDE.md, o
 
 | Parameter | Source | Example |
 |---|---|---|
-| `ARC_DIR` | AutoResearchClaw install path | `/home/ubuntu/vision/AutoResearchClaw` |
+| `AHVS_DIR` | BB_AHVS install path | `/home/ubuntu/vision/BB_AHVS` |
 | `REPO_PATH` | Target repo for AHVS | `/home/ubuntu/vision/rnd_user_cohort/autoqa` |
 | `ENV_FILE` | Env vars file (API keys etc.) | `/home/ubuntu/vision/rnd_user_cohort/.env` |
 | `PYTHON` | Python binary with dependencies | `/home/ubuntu/miniconda3/envs/cohort_work/bin/python` |

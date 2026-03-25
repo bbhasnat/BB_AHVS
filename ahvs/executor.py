@@ -55,17 +55,16 @@ def _utcnow_iso() -> str:
 
 
 def _make_llm_client(config: AHVSConfig) -> Any:
-    """Build an LLM client from AHVSConfig via the shared ARC factory.
+    """Build an LLM client from AHVSConfig via the AHVS LLM factory.
 
-    Routes through ``researchclaw.llm.create_llm_client()`` so that
-    provider selection (Anthropic, OpenAI, ACP, etc.) is handled in one
-    place.  A lightweight shim object bridges AHVSConfig fields to the
-    ``RCConfig.llm`` / ``RCConfig.metaclaw_bridge`` shape expected by
-    the factory.
+    Routes through ``ahvs.llm.create_llm_client()`` so that provider
+    selection (Anthropic, OpenAI, ACP, etc.) is handled in one place.
+    A lightweight shim object bridges AHVSConfig fields to the shape
+    expected by the factory.
     """
     from ahvs.llm import create_llm_client
 
-    shim = _ahvs_config_to_rc_shim(config)
+    shim = _ahvs_config_to_llm_shim(config)
     return create_llm_client(shim)
 
 
@@ -100,19 +99,18 @@ class _LlmShim:
         self.acp = _AcpShim(config)
 
 
-class _RCConfigShim:
+class _LLMConfigShim:
     """Minimal shim bridging AHVSConfig to the shape ``create_llm_client`` expects."""
 
-    __slots__ = ("llm", "metaclaw_bridge")
+    __slots__ = ("llm",)
 
     def __init__(self, config: AHVSConfig) -> None:
         self.llm = _LlmShim(config)
-        self.metaclaw_bridge = None  # AHVS does not use the MetaClaw proxy
 
 
-def _ahvs_config_to_rc_shim(config: AHVSConfig) -> _RCConfigShim:
+def _ahvs_config_to_llm_shim(config: AHVSConfig) -> _LLMConfigShim:
     """Convert an AHVSConfig into a shim compatible with ``create_llm_client``."""
-    return _RCConfigShim(config)
+    return _LLMConfigShim(config)
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +343,6 @@ def _generate_files_with_claude_code(
         if ".ahvs" not in p.parts
         and "__pycache__" not in p.parts
         and ".git" not in p.parts
-        and "autoresearch" not in p.parts
     )
     file_listing = "\n".join(f"- {f}" for f in src_files[:30])
 
@@ -1653,7 +1650,6 @@ def _run_single_hypothesis(
             if ".ahvs" not in p.parts
             and "__pycache__" not in p.parts
             and ".git" not in p.parts
-            and "autoresearch" not in p.parts
         )
         if src_files:
             repo_files_listing = (

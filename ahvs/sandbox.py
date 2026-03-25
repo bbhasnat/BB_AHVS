@@ -17,7 +17,7 @@ from ahvs.sandbox_config import SandboxConfig
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Inlined from researchclaw.hardware: is_metric_name + dependencies
+# Inlined metric-name detection utilities
 # ---------------------------------------------------------------------------
 
 # Words that indicate a log/status line rather than a metric

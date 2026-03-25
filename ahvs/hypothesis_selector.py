@@ -443,14 +443,14 @@ def run_selector(
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point: python -m researchclaw.ahvs.hypothesis_selector <cycle_dir>
+# CLI entry point: python -m ahvs.hypothesis_selector <cycle_dir>
 # ---------------------------------------------------------------------------
 
 
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     if not args:
-        print("Usage: python -m researchclaw.ahvs.hypothesis_selector <cycle_dir> [question]",
+        print("Usage: python -m ahvs.hypothesis_selector <cycle_dir> [question]",
               file=sys.stderr)
         return 1
 

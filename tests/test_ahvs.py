@@ -1189,7 +1189,7 @@ class TestAHVSConfigACP:
         config = AHVSConfig(repo_path=tmp_path, question="test", llm_provider="acp")
         assert config.acp_agent == "claude"
         assert config.acp_cwd == str(tmp_path.resolve())
-        assert config.acp_session_name == "researchclaw-ahvs"
+        assert config.acp_session_name == "ahvs"
         assert config.acp_timeout_sec == 1800
 
     def test_acp_cwd_resolved_to_repo(self, tmp_path: Path) -> None:
@@ -1198,10 +1198,10 @@ class TestAHVSConfigACP:
 
 
 class TestShimConstruction:
-    """Tests for the _RCConfigShim that bridges AHVSConfig to create_llm_client."""
+    """Tests for the _LLMConfigShim that bridges AHVSConfig to create_llm_client."""
 
     def test_shim_exposes_llm_fields(self, tmp_path: Path) -> None:
-        from ahvs.executor import _ahvs_config_to_rc_shim
+        from ahvs.executor import _ahvs_config_to_llm_shim
 
         config = AHVSConfig(
             repo_path=tmp_path, question="test",
@@ -1210,15 +1210,14 @@ class TestShimConstruction:
             llm_api_key="sk-test",
             llm_base_url="https://example.com",
         )
-        shim = _ahvs_config_to_rc_shim(config)
+        shim = _ahvs_config_to_llm_shim(config)
         assert shim.llm.provider == "anthropic"
         assert shim.llm.primary_model == "claude-opus-4-6"
         assert shim.llm.api_key == "sk-test"
         assert shim.llm.base_url == "https://example.com"
-        assert shim.metaclaw_bridge is None
 
     def test_shim_exposes_acp_fields(self, tmp_path: Path) -> None:
-        from ahvs.executor import _ahvs_config_to_rc_shim
+        from ahvs.executor import _ahvs_config_to_llm_shim
 
         config = AHVSConfig(
             repo_path=tmp_path, question="test",
@@ -1227,7 +1226,7 @@ class TestShimConstruction:
             acp_session_name="my-session",
             acp_timeout_sec=600,
         )
-        shim = _ahvs_config_to_rc_shim(config)
+        shim = _ahvs_config_to_llm_shim(config)
         assert shim.llm.provider == "acp"
         assert shim.llm.acp.agent == "codex"
         assert shim.llm.acp.session_name == "my-session"
@@ -1342,7 +1341,6 @@ class TestPreflightUsesSharedFactory:
         assert shim.llm.provider == "openai"
         assert shim.llm.primary_model == "gpt-4o"
         assert shim.llm.api_key == "sk-test"
-        assert shim.metaclaw_bridge is None
 
     def test_preflight_builds_shim_for_openrouter(self) -> None:
         """provider=openrouter should build a shim that the factory accepts."""
@@ -1422,7 +1420,7 @@ class TestProviderMatrixFactory:
 
     def test_openai_shim_base_url_empty_uses_preset(self, tmp_path: Path) -> None:
         """When llm_base_url is empty, the factory should use PROVIDER_PRESETS."""
-        from ahvs.executor import _ahvs_config_to_rc_shim
+        from ahvs.executor import _ahvs_config_to_llm_shim
 
         config = AHVSConfig(
             repo_path=tmp_path, question="test",
@@ -1430,7 +1428,7 @@ class TestProviderMatrixFactory:
             llm_base_url="",  # empty — factory should use preset
             llm_api_key="sk-test",
         )
-        shim = _ahvs_config_to_rc_shim(config)
+        shim = _ahvs_config_to_llm_shim(config)
         assert shim.llm.provider == "openai"
         assert shim.llm.base_url == ""  # shim passes empty; factory resolves via preset
 
@@ -1535,7 +1533,7 @@ class TestFromCliArgsParity:
             api_key_env="OPENAI_API_KEY",
             acp_agent="claude",
             acpx_command="",
-            acp_session_name="researchclaw-ahvs",
+            acp_session_name="ahvs",
             acp_timeout_sec=1800,
         )
         config = AHVSConfig.from_cli_args(args)

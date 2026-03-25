@@ -38,7 +38,7 @@ class ACPConfig:
     agent: str = "claude"
     cwd: str = "."
     acpx_command: str = ""  # auto-detect if empty
-    session_name: str = "researchclaw"
+    session_name: str = "ahvs"
     timeout_sec: int = 1800  # per-prompt timeout
 
 
@@ -76,14 +76,14 @@ class ACPClient:
         atexit.register(ACPClient._atexit_cleanup)
 
     @classmethod
-    def from_rc_config(cls, rc_config: Any) -> ACPClient:
+    def from_ahvs_config(cls, ahvs_cfg: Any) -> ACPClient:
         """Build from a config object with llm.acp attributes."""
-        acp = rc_config.llm.acp
+        acp = ahvs_cfg.llm.acp
         return cls(ACPConfig(
             agent=acp.agent,
             cwd=acp.cwd,
             acpx_command=getattr(acp, "acpx_command", ""),
-            session_name=getattr(acp, "session_name", "researchclaw"),
+            session_name=getattr(acp, "session_name", "ahvs"),
             timeout_sec=getattr(acp, "timeout_sec", 1800),
         ))
 
@@ -260,7 +260,7 @@ class ACPClient:
     def _send_prompt_via_file(self, acpx: str, prompt: str) -> str:
         """Write prompt to a temp file, ask the agent to read and respond."""
         fd, prompt_path = tempfile.mkstemp(
-            suffix=".md", prefix="rc_prompt_", dir="/tmp"
+            suffix=".md", prefix="ahvs_prompt_", dir="/tmp"
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:

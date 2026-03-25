@@ -72,9 +72,9 @@ class LLMConfig:
     retry_base_delay: float = 2.0
     timeout_sec: int = 300
     user_agent: str = _DEFAULT_USER_AGENT
-    # MetaClaw bridge: extra headers for proxy requests
+    # Extra headers for proxy requests
     extra_headers: dict[str, str] = field(default_factory=dict)
-    # MetaClaw bridge: fallback URL if primary (proxy) is unreachable
+    # Fallback URL if primary endpoint is unreachable
     fallback_url: str = ""
     fallback_api_key: str = ""
 
@@ -85,57 +85,37 @@ class LLMClient:
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
         self._model_chain = [config.primary_model] + list(config.fallback_models)
-        self._anthropic = None  # Will be set by from_rc_config if needed
+        self._anthropic = None  # Will be set by from_ahvs_config if needed
 
     @classmethod
-    def from_rc_config(cls, rc_config: Any) -> LLMClient:
+    def from_ahvs_config(cls, ahvs_cfg: Any) -> LLMClient:
         from ahvs.llm import PROVIDER_PRESETS
 
-        provider = getattr(rc_config.llm, "provider", "openai")
+        provider = getattr(ahvs_cfg.llm, "provider", "openai")
         preset = PROVIDER_PRESETS.get(provider, {})
         preset_base_url = preset.get("base_url")
 
         api_key = str(
-            rc_config.llm.api_key
-            or os.environ.get(rc_config.llm.api_key_env, "")
+            ahvs_cfg.llm.api_key
+            or os.environ.get(ahvs_cfg.llm.api_key_env, "")
             or ""
         )
 
         # Use preset base_url if available and config doesn't override
-        base_url = rc_config.llm.base_url or preset_base_url or ""
+        base_url = ahvs_cfg.llm.base_url or preset_base_url or ""
 
-        # Preserve original URL/key before MetaClaw bridge override
-        # (needed for Anthropic adapter which should always talk directly
-        # to the Anthropic API, not through the OpenAI-compatible proxy).
         original_base_url = base_url
         original_api_key = api_key
-
-        # MetaClaw bridge: if enabled, point to proxy and set up fallback
-        bridge = getattr(rc_config, "metaclaw_bridge", None)
-        fallback_url = ""
-        fallback_api_key = ""
-
-        if bridge and getattr(bridge, "enabled", False):
-            fallback_url = base_url
-            fallback_api_key = api_key
-            base_url = bridge.proxy_url
-            if bridge.fallback_url:
-                fallback_url = bridge.fallback_url
-            if bridge.fallback_api_key:
-                fallback_api_key = bridge.fallback_api_key
 
         config = LLMConfig(
             base_url=base_url,
             api_key=api_key,
-            primary_model=rc_config.llm.primary_model or "gpt-4o",
-            fallback_models=list(rc_config.llm.fallback_models or []),
-            fallback_url=fallback_url,
-            fallback_api_key=fallback_api_key,
+            primary_model=ahvs_cfg.llm.primary_model or "gpt-4o",
+            fallback_models=list(ahvs_cfg.llm.fallback_models or []),
         )
         client = cls(config)
 
-        # Detect Anthropic provider — use original URL/key (not the
-        # MetaClaw proxy URL which is OpenAI-compatible only).
+        # Detect Anthropic provider — use original URL/key.
         if provider == "anthropic":
             from .anthropic_adapter import AnthropicAdapter
 
@@ -345,7 +325,7 @@ class LLMClient:
                 "Content-Type": "application/json",
                 "User-Agent": self.config.user_agent,
             }
-            # MetaClaw bridge: inject extra headers (session ID, stage info, etc.)
+            # Inject any extra headers
             headers.update(self.config.extra_headers)
 
             req = urllib.request.Request(url, data=payload, headers=headers)
@@ -354,7 +334,7 @@ class LLMClient:
                 with urllib.request.urlopen(req, timeout=self.config.timeout_sec) as resp:
                     data = json.loads(resp.read())
             except (urllib.error.URLError, OSError) as exc:
-                # MetaClaw bridge: fallback to direct LLM if proxy unreachable
+                # Fallback to alternative endpoint if primary is unreachable
                 if self.config.fallback_url:
                     logger.warning(
                         "Primary endpoint unreachable, falling back to %s: %s",
@@ -412,9 +392,9 @@ class LLMClient:
 
 
 def create_client_from_yaml(yaml_path: str | None = None) -> LLMClient:
-    """Create an LLMClient from the ARC config file.
+    """Create an LLMClient from a YAML config file.
 
-    Reads base_url and api_key from config.arc.yaml's llm section.
+    Reads base_url and api_key from the config file's llm section.
     """
     import yaml as _yaml
 

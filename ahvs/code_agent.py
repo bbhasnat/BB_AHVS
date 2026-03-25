@@ -146,7 +146,7 @@ class _SandboxLike(Protocol):  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
-# Inlined file extraction helpers (from researchclaw.pipeline.executor)
+# Inlined file extraction helpers
 # ---------------------------------------------------------------------------
 
 

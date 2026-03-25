@@ -38,7 +38,7 @@ DURING EXECUTION:
 - The framework has built-in protections (forbidden file filter, pre-eval import
   check, authoritative eval). These are features — do not work around them.
 - Do NOT modify any hypothesis output or results manually
-- Do NOT modify AutoResearchClaw source code — that's the observer's job
+- Do NOT modify BB_AHVS framework source code — that's the observer's job
 - If the command crashes with a framework error, report the full stack trace to the lead
 
 WHEN A HYPOTHESIS COMPLETES:

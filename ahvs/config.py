@@ -51,7 +51,7 @@ class AHVSConfig:
     acp_agent: str = "claude"
     acp_cwd: str = "."           # resolved to repo_path in __post_init__
     acpx_command: str = ""       # auto-detect if empty
-    acp_session_name: str = "researchclaw-ahvs"
+    acp_session_name: str = "ahvs"
     acp_timeout_sec: int = 1800  # per-prompt timeout
 
     def __post_init__(self) -> None:
@@ -112,6 +112,6 @@ class AHVSConfig:
             llm_api_key_env=getattr(args, "api_key_env", "ANTHROPIC_API_KEY") or "ANTHROPIC_API_KEY",
             acp_agent=getattr(args, "acp_agent", "claude") or "claude",
             acpx_command=getattr(args, "acpx_command", "") or "",
-            acp_session_name=getattr(args, "acp_session_name", "researchclaw-ahvs") or "researchclaw-ahvs",
+            acp_session_name=getattr(args, "acp_session_name", "ahvs") or "ahvs",
             acp_timeout_sec=getattr(args, "acp_timeout_sec", 1800) or 1800,
         )

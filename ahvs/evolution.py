@@ -1,7 +1,7 @@
-"""Self-evolution system for the ResearchClaw pipeline.
+"""Self-evolution system for the AHVS pipeline.
 
-Records lessons from each pipeline run (failures, slow stages, quality issues)
-and injects them into future runs as prompt overlays.  Inspired by Sibyl's
+Records lessons from each AHVS cycle (failures, slow stages, quality issues)
+and injects them into future cycles as prompt overlays.  Inspired by Sibyl's
 time-weighted evolution mechanism.
 
 Architecture
@@ -122,14 +122,9 @@ def _classify_error(stage_name: str, error_text: str) -> str:
 
 # Stage name mapping (import-free to avoid circular deps)
 _STAGE_NAMES: dict[int, str] = {
-    1: "topic_init", 2: "problem_decompose", 3: "search_strategy",
-    4: "literature_collect", 5: "literature_screen", 6: "knowledge_extract",
-    7: "synthesis", 8: "hypothesis_gen", 9: "experiment_design",
-    10: "code_generation", 11: "resource_planning", 12: "experiment_run",
-    13: "iterative_refine", 14: "result_analysis", 15: "research_decision",
-    16: "paper_outline", 17: "paper_draft", 18: "peer_review",
-    19: "paper_revision", 20: "quality_gate", 21: "knowledge_archive",
-    22: "export_publish", 23: "citation_verify",
+    1: "ahvs_setup", 2: "ahvs_context_load", 3: "ahvs_hypothesis_gen",
+    4: "ahvs_human_selection", 5: "ahvs_validation_plan", 6: "ahvs_execution",
+    7: "ahvs_report_memory", 8: "ahvs_cycle_verify",
 }
 
 
@@ -424,8 +419,7 @@ class EvolutionStore:
 
         Combines two sources:
         1. Current-run lessons from ``lessons.jsonl`` (intra-run learning).
-        2. Cross-run MetaClaw ``arc-*`` skills from *skills_dir* (inter-run
-           learning via the MetaClaw skill-generation feedback loop).
+        2. Cross-run ``arc-*`` skills from *skills_dir* (inter-run learning).
 
         Returns empty string if no relevant lessons or skills exist.
         """
@@ -446,7 +440,7 @@ class EvolutionStore:
                 "\nUse these lessons to avoid repeating past mistakes."
             )
 
-        # --- Section 2: cross-run MetaClaw arc-* skills ---
+        # --- Section 2: cross-run arc-* skills ---
         if skills_dir:
             from pathlib import Path as _Path
 

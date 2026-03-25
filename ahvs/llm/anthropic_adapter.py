@@ -1,4 +1,4 @@
-"""Anthropic Messages API adapter for ResearchClaw."""
+"""Anthropic Messages API adapter for AHVS."""
 
 import json
 import logging

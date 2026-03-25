@@ -1,7 +1,4 @@
-"""Standalone sandbox and experiment configuration dataclasses.
-
-Extracted from the full ResearchClaw config for use by BB_AHVS.
-"""
+"""Standalone sandbox and experiment configuration dataclasses for BB_AHVS."""
 
 from __future__ import annotations
 
@@ -31,11 +28,11 @@ class SshRemoteConfig:
     port: int = 22
     key_path: str = ""
     gpu_ids: tuple[int, ...] = ()
-    remote_workdir: str = "/tmp/researchclaw_experiments"
+    remote_workdir: str = "/tmp/ahvs_experiments"
     remote_python: str = "python3"
     setup_commands: tuple[str, ...] = ()
     use_docker: bool = False
-    docker_image: str = "researchclaw/experiment:latest"
+    docker_image: str = "ahvs/experiment:latest"
     docker_network_policy: str = "none"
     docker_memory_limit_mb: int = 8192
     docker_shm_size_mb: int = 2048
@@ -45,7 +42,7 @@ class SshRemoteConfig:
 class ColabDriveConfig:
     """Configuration for Google Drive-based async Colab execution."""
 
-    drive_root: str = ""  # local mount path, e.g. ~/Google Drive/MyDrive/researchclaw
+    drive_root: str = ""  # local mount path, e.g. ~/Google Drive/MyDrive/ahvs
     poll_interval_sec: int = 30
     timeout_sec: int = 3600
     setup_script: str = ""  # commands to run before experiment, written to setup.sh
@@ -55,7 +52,7 @@ class ColabDriveConfig:
 class DockerSandboxConfig:
     """Configuration for Docker-based experiment sandbox."""
 
-    image: str = "researchclaw/experiment:latest"
+    image: str = "ahvs/experiment:latest"
     gpu_enabled: bool = True
     gpu_device_ids: tuple[int, ...] = ()
     memory_limit_mb: int = 8192
@@ -121,7 +118,7 @@ class FigureAgentConfig:
     # Renderer security
     render_timeout_sec: int = 30
     use_docker: bool | None = None  # None = auto-detect, True/False to force
-    docker_image: str = "researchclaw/experiment:latest"
+    docker_image: str = "ahvs/experiment:latest"
     # Code generation output format
     output_format: str = "python"  # "python" (matplotlib) or "latex" (TikZ/PGFPlots)
     # Nano Banana (Gemini image generation)

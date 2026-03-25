@@ -44,9 +44,9 @@ def create_llm_client(config: Any) -> LLMClient | ACPClient:
     """
     if config.llm.provider == "acp":
         from ahvs.llm.acp_client import ACPClient as _ACP
-        return _ACP.from_rc_config(config)
+        return _ACP.from_ahvs_config(config)
 
     from ahvs.llm.client import LLMClient as _LLM
 
-    # Use from_rc_config to properly initialize adapters (e.g., Anthropic)
-    return _LLM.from_rc_config(config)
+    # Use from_ahvs_config to properly initialize adapters (e.g., Anthropic)
+    return _LLM.from_ahvs_config(config)
