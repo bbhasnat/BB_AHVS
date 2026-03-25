@@ -20,10 +20,10 @@ Prompt:
 You are the executor agent for an AHVS multi-agent cycle.
 
 BEFORE STARTING:
-- Read {ARC_DIR}/CLAUDE.md
+- Read {AHVS_DIR}/CLAUDE.md
 - Read all memory files in {REPO_PATH}/.ahvs/memory/
 - Confirm the branch and clean working tree:
-    cd {ARC_DIR} && git status
+    cd {AHVS_DIR} && git status
 
 YOUR ROLE:
 Run one hypothesis at a time when the team lead sends you an H-ID.
@@ -76,10 +76,10 @@ hypothesis results, classify failures, fix framework bugs (including missing
 guardrails), and ensure lessons are recorded.
 
 BEFORE STARTING:
-- Read {ARC_DIR}/CLAUDE.md — follow its memory discipline exactly
+- Read {AHVS_DIR}/CLAUDE.md — follow its memory discipline exactly
 - Read all memory files in {REPO_PATH}/.ahvs/memory/
-- Read {ARC_DIR}/README_AHVS.md sections 1-3 for AHVS architecture context
-- Read {ARC_DIR}/.claude/skills/ahvs_multiagent/references/failure_classification.md
+- Read {AHVS_DIR}/README.md sections 1-3 for AHVS architecture context
+- Read {AHVS_DIR}/.claude/skills/ahvs_multiagent/references/failure_classification.md
   for the full classification rules (this is your source of truth)
 
 YOUR ROLE:
@@ -109,7 +109,7 @@ features, not bugs. Do not try to "fix" or work around them:
 
 3. AUTHORITATIVE EVAL: When eval_command is configured, it is the only trusted
    measurement source. Self-reported result.json files are skipped. Only eval_command output is trusted. When you see extraction_failed
-   with a configured eval_command, the sandbox metrics were correctly ignored.
+   with a configured eval_command, self-reported metrics were correctly ignored.
 
 FAILURE CLASSIFICATION — every result falls into exactly one category:
 
@@ -174,10 +174,10 @@ AMBIGUOUS:
 FIXING FRAMEWORK BUGS — follow this exact sequence:
 
 a. Run full AHVS test suite BEFORE your fix:
-     cd {ARC_DIR} && \
+     cd {AHVS_DIR} && \
      {PYTHON} -m pytest tests/test_ahvs.py -v \
        2>&1 | tee /tmp/pytest_before_fix.log
-   Note how many tests pass (currently 209). This is your baseline.
+   Note how many tests pass (currently 208). This is your baseline.
 
 b. If the bug involves an unfamiliar API, use Context7 first:
      mcp__claude_ai_Context7__resolve-library-id: libraryName: "<library>"
@@ -188,11 +188,11 @@ c. Read the relevant source files in ahvs/ahvs/ BEFORE editing
 d. Apply the minimal fix — do not refactor surrounding code
 
 e. Run full AHVS test suite AFTER your fix:
-     cd {ARC_DIR} && \
+     cd {AHVS_DIR} && \
      {PYTHON} -m pytest tests/test_ahvs.py -v \
        2>&1 | tee /tmp/pytest_after_fix.log
 
-f. Compare: all 209 previously-passing tests must still pass (zero regressions)
+f. Compare: all 208 previously-passing tests must still pass (zero regressions)
 
 g. If any test regresses: REVERT the fix, escalate to lead with both logs
 

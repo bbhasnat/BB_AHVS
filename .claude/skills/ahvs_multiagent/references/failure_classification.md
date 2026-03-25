@@ -187,7 +187,7 @@ The team lead:
 a. Reads the diff: `git diff` on the changed files
 b. If satisfied, commits the fix:
 ```bash
-cd {ARC_DIR} && \
+cd {AHVS_DIR} && \
 git add <changed files> && \
 git commit -m "fix: <description of what observer fixed>"
 ```
@@ -217,17 +217,17 @@ This applies to both Subcategory A and Subcategory B fixes.
 ### Before the fix
 
 ```bash
-cd {ARC_DIR} && \
+cd {AHVS_DIR} && \
 {PYTHON} -m pytest tests/test_ahvs.py -v \
   2>&1 | tee /tmp/pytest_before_fix.log
 ```
 
-Record the number of passing tests (currently 209). This is the baseline.
+Record the number of passing tests (currently 208). This is the baseline.
 
 ### After the fix
 
 ```bash
-cd {ARC_DIR} && \
+cd {AHVS_DIR} && \
 {PYTHON} -m pytest tests/test_ahvs.py -v \
   2>&1 | tee /tmp/pytest_after_fix.log
 ```
@@ -238,7 +238,7 @@ cd {ARC_DIR} && \
 |---|---|
 | All previously-passing tests still pass | Yes — zero regressions allowed |
 | No new test failures | Yes |
-| Full AHVS test suite passes (209 tests) | Yes |
+| Full AHVS test suite passes (208 tests) | Yes |
 | New test added for the specific fix | Recommended but not blocking |
 
 ### If the gate fails

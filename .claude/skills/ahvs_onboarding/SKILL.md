@@ -32,7 +32,7 @@ The user should never need to manually author JSON or figure out what AHVS needs
 **Does not:**
 1. Invent baseline values or guess fake eval commands
 2. Start an AHVS cycle — that's a separate step after onboarding
-3. Hide reduced-trust mode when the target is not in git
+3. Modify git state without informing the user (AHVS auto-initializes git at Stage 1 if needed)
 
 ## Return Contract
 

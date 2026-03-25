@@ -39,7 +39,7 @@ This skill orchestrates a full AHVS hypothesis-validation cycle using three coor
 Before running, verify:
 
 1. **AHVS is onboarded**: the target repo has `.ahvs/baseline_metric.json`
-2. **Branch is correct**: `cd <ARC_DIR> && git branch --show-current` should show the expected branch
+2. **Branch is correct**: `cd {AHVS_DIR} && git branch --show-current` should show the expected branch
 3. **Working tree is clean**: `git status` shows no uncommitted changes
 4. **Env vars are loadable**: the target repo's `.env` file exists
 5. **Python env**: the correct conda/venv has all dependencies
@@ -70,7 +70,7 @@ The skill needs these values. Extract them from the user's message, CLAUDE.md, o
 Run AHVS Stages 1–3 only. This produces `hypotheses.md` in the cycle dir.
 
 ```bash
-cd {ARC_DIR} && \
+cd {AHVS_DIR} && \
 export $(grep -v '^#' {ENV_FILE} | xargs) && \
 {PYTHON} -m ahvs \
   --repo {REPO_PATH} \
@@ -151,7 +151,7 @@ SendMessage:
   message: |
     Run hypothesis {H_ID}. Use this exact command:
 
-    cd {ARC_DIR} && \
+    cd {AHVS_DIR} && \
     export $(grep -v '^#' {ENV_FILE} | xargs) && \
     {PYTHON} -m ahvs \
       --repo {REPO_PATH} \
@@ -201,12 +201,12 @@ When the observer reports RERUN_NEEDED with fix details:
 
 1. **Review the fix** — read the diff of changed files:
    ```bash
-   cd {ARC_DIR} && git diff
+   cd {AHVS_DIR} && git diff
    ```
 
 2. **If the fix looks correct and COMMIT_FIX is true:**
    ```bash
-   cd {ARC_DIR} && \
+   cd {AHVS_DIR} && \
    git add <files the observer changed> && \
    git commit -m "fix: <observer's description of what was fixed>"
    ```
@@ -216,7 +216,7 @@ When the observer reports RERUN_NEEDED with fix details:
    Tell the user: "Observer fixed <description> (uncommitted). Re-running {H_ID}."
 
 4. **If the fix looks wrong:**
-   Revert it: `cd {ARC_DIR} && git checkout -- <files>`
+   Revert it: `cd {AHVS_DIR} && git checkout -- <files>`
    Ask the observer to try a different approach, or escalate to user.
 
 5. **Re-run the hypothesis** — go back to Step A for the same H_ID.
@@ -246,7 +246,7 @@ If a framework fix was committed, include:
 After all hypotheses are done, run the archive stages (7–8):
 
 ```bash
-cd {ARC_DIR} && \
+cd {AHVS_DIR} && \
 export $(grep -v '^#' {ENV_FILE} | xargs) && \
 {PYTHON} -m ahvs \
   --repo {REPO_PATH} \
