@@ -339,6 +339,13 @@ class HypothesisWorktree:
                 "and that Claude Code did not delete it during generation."
             )
 
+        # Symlink untracked data directories (checkpoints, ground-truth,
+        # build artifacts) from the live repo into the worktree so that
+        # eval commands have access to the same data files.  Git worktrees
+        # only contain tracked files — without this, evals that read
+        # gitignored data (e.g. parquet checkpoints) will crash.
+        self._symlink_untracked_dirs(git_root, self.worktree_path)
+
     def read_file(self, relpath: str) -> str | None:
         """Read a file from the worktree by repo-relative path.
 
@@ -578,6 +585,50 @@ class HypothesisWorktree:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _symlink_untracked_dirs(live_root: Path, wt_root: Path) -> None:
+        """Symlink untracked directories from the live repo into the worktree.
+
+        Git worktrees only contain tracked files.  Data directories that are
+        gitignored (checkpoints, ground-truth parquets, build artefacts) won't
+        exist in the worktree, causing eval commands to fail.
+
+        This scans two levels deep:
+        - Level 0: top-level dirs in *live_root* missing from *wt_root*
+        - Level 1: subdirs within tracked parents (e.g.
+          ``ground_truth_builder/checkpoints/`` where the parent is tracked
+          but the subdir is not)
+
+        Only directories are symlinked; regular files are ignored (they are
+        either tracked or irrelevant).  Hidden directories (starting with
+        ``'.'``) are skipped to avoid symlinking ``.git``, ``.ahvs``, etc.
+        """
+        if not live_root.is_dir() or not wt_root.is_dir():
+            return
+        for item in live_root.iterdir():
+            if item.name.startswith(".") or not item.is_dir():
+                continue
+            wt_item = wt_root / item.name
+            if not wt_item.exists() and not wt_item.is_symlink():
+                # Entirely untracked directory — symlink it
+                wt_item.symlink_to(item.resolve())
+                logger.info(
+                    "Symlinked untracked dir into worktree: %s → %s",
+                    wt_item, item.resolve(),
+                )
+            elif wt_item.is_dir() and not wt_item.is_symlink():
+                # Tracked parent — check one level deeper for untracked subdirs
+                for sub in item.iterdir():
+                    if sub.name.startswith(".") or not sub.is_dir():
+                        continue
+                    wt_sub = wt_item / sub.name
+                    if not wt_sub.exists() and not wt_sub.is_symlink():
+                        wt_sub.symlink_to(sub.resolve())
+                        logger.info(
+                            "Symlinked untracked subdir into worktree: %s → %s",
+                            wt_sub, sub.resolve(),
+                        )
 
     @staticmethod
     def _run_git(
