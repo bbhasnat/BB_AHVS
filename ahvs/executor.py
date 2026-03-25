@@ -213,10 +213,10 @@ _TYPE_EXECUTION_STRATEGIES: dict[str, dict[str, str]] = {
 # Forbidden file patterns — eval-harness protection
 # ---------------------------------------------------------------------------
 
-# Basenames that CodeAgent is NOT allowed to write to the worktree.
+# Basenames that Claude Code is NOT allowed to write to the worktree.
 # These are eval-harness infrastructure files.  Modifying them consistently
 # breaks the eval pipeline (circular imports, broken argparse, missing entry
-# points).  The prompt tells CodeAgent not to touch them; this filter
+# points).  The prompt tells Claude Code not to touch them; this filter
 # enforces it at the framework level.
 #
 # Hard-blocked: always rejected.  Only files that are definitively
@@ -249,7 +249,7 @@ def _is_forbidden_file(relpath: str, *, repo_has_src: bool = False) -> str | Non
     ``_is_warn_file()`` to check those separately.
 
     When *repo_has_src* is True, root-level ``.py`` files (no directory
-    component) are blocked because CodeAgent should be modifying files
+    component) are blocked because Claude Code should be modifying files
     inside the ``src/`` subtree, not creating standalone scripts at the
     repo root.
     """
@@ -268,7 +268,7 @@ def _is_forbidden_file(relpath: str, *, repo_has_src: bool = False) -> str | Non
         return f"test file not allowed in worktree: {basename}"
 
     # Block root-level .py files when the repo has a src/ directory.
-    # CodeAgent frequently writes to e.g. "parsing.py" at the repo root
+    # Claude Code frequently writes to e.g. "parsing.py" at the repo root
     # instead of "src/autoqa/parsing.py".  These root-level files are
     # never executed by the eval pipeline and waste the hypothesis.
     if repo_has_src and basename.endswith(".py") and p.parent == PurePosixPath("."):
@@ -283,7 +283,7 @@ def _is_forbidden_file(relpath: str, *, repo_has_src: bool = False) -> str | Non
 def _remap_root_file(basename: str, repo_path: "Path") -> str | None:
     """Try to find a unique ``src/`` file matching *basename*.
 
-    When CodeAgent writes ``parsing.py`` at the repo root but
+    When Claude Code writes ``parsing.py`` at the repo root but
     ``src/autoqa/parsing.py`` exists, return the correct relative path
     so the framework can auto-remap instead of blocking.
 
@@ -313,12 +313,12 @@ def _generate_files_with_claude_code(
 ) -> dict[str, str]:
     """Use Claude Code CLI to make targeted file edits for a hypothesis.
 
-    Instead of the full CodeAgent pipeline (blueprint → generate → sandbox),
+    Instead of a full code-generation pipeline (blueprint → generate → sandbox),
     this invokes ``claude -p`` with a focused prompt that reads the target
     file and applies the specific change described in the hypothesis.
 
     Returns a dict mapping relative file paths → modified file content,
-    matching the ``CodeAgentResult.files`` interface.
+    matching a ``dict[str, str]`` (filename → content) interface.
     """
     import json as _json
     import shutil
@@ -327,7 +327,7 @@ def _generate_files_with_claude_code(
     claude_bin = shutil.which("claude")
     if claude_bin is None:
         raise RuntimeError(
-            "claude CLI not found — install Claude Code or set use_claude_code=False"
+            "claude CLI not found — install Claude Code"
         )
 
     description = hyp.get("description", "")
@@ -378,7 +378,7 @@ def _generate_files_with_claude_code(
     )
 
     logger.info(
-        "%s: invoking Claude Code CLI for targeted edit (use_claude_code=True)",
+        "%s: invoking Claude Code CLI for targeted edit",
         hyp_id,
     )
     print(f"[AHVS] {hyp_id}: using Claude Code for targeted file edit")
@@ -636,7 +636,7 @@ def _run_import_sanity_check(
     worktree: "HypothesisWorktree",
     eval_command: str,
 ) -> str | None:
-    """Verify key modules can still import after CodeAgent changes.
+    """Verify key modules can still import after Claude Code changes.
 
     Parses the eval_command to find the Python module being invoked
     (e.g. ``python -m autoqa.run_eval`` → ``autoqa.run_eval``) and
@@ -679,7 +679,7 @@ def _run_import_sanity_check(
     if result.returncode != 0:
         return (
             f"import {parsed.module_name} failed in worktree after applying "
-            f"CodeAgent changes. stderr: {result.stderr[:300]}"
+            f"Claude Code changes. stderr: {result.stderr[:300]}"
         )
     return None
 
@@ -937,34 +937,6 @@ def _run_regression_guard(guard_path: Path | None, results_path: Path) -> bool:
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.error("Regression guard failed: %s", exc)
         return False
-
-
-# ---------------------------------------------------------------------------
-# Sandbox factory helper
-# ---------------------------------------------------------------------------
-
-
-def _make_sandbox_factory(config: AHVSConfig) -> Any:
-    """Return a sandbox factory callable for CodeAgent."""
-    import sys
-    from ahvs.sandbox_config import (
-        ExperimentConfig,
-        SandboxConfig,
-        DockerSandboxConfig,
-        SshRemoteConfig,
-        ColabDriveConfig,
-    )
-    from ahvs.sandbox import ExperimentSandbox
-
-    python_path = sys.executable  # absolute path to current interpreter
-
-    def _factory(exp_config: Any, workdir: Path) -> Any:
-        return ExperimentSandbox(
-            SandboxConfig(python_path=python_path),
-            workdir,
-        )
-
-    return _factory
 
 
 # ---------------------------------------------------------------------------
@@ -1510,7 +1482,7 @@ def _execute_hypotheses(
     skill_library: SkillLibrary,
     auto_approve: bool,
 ) -> AHVSStageResult:
-    """Stage 6: Invoke CodeAgent for each selected hypothesis; collect results."""
+    """Stage 6: Invoke Claude Code for each selected hypothesis; collect results."""
     for required in ("validation_plan.md", "selection.json", "context_bundle.json"):
         if not (cycle_dir / required).exists():
             return AHVSStageResult(
@@ -1619,12 +1591,10 @@ def _run_single_hypothesis(
     baseline: dict,
     available_tools: set[str],
 ) -> tuple[HypothesisResult, "HypothesisWorktree | None"]:
-    """Execute one hypothesis using CodeAgent and return (result, worktree).
+    """Execute one hypothesis via Claude Code CLI and return (result, worktree).
 
     The worktree object is returned so the caller can manage keep/revert.
     """
-    from ahvs.code_agent import CodeAgent, CodeAgentConfig
-    from ahvs.prompts import PromptManager
     from ahvs.worktree import HypothesisWorktree
 
     work_dir = cycle_dir / "tool_runs" / hyp_id
@@ -1638,10 +1608,10 @@ def _run_single_hypothesis(
     skills = skill_library.for_hypothesis_type(hyp_type, available_tools)
     skill_context = skill_library.to_context_block(skills)
 
-    # Build CodeAgent problem statement
+    # Build Claude Code problem statement
     eval_command = baseline.get("eval_command", "")
 
-    # Collect repo source files for the CodeAgent prompt
+    # Collect repo source files for the Claude Code prompt
     repo_files_listing = ""
     try:
         src_files = sorted(
@@ -1660,9 +1630,9 @@ def _run_single_hypothesis(
     except Exception:  # noqa: BLE001
         pass
 
-    # Extract public API signatures from key source files so the CodeAgent
+    # Extract public API signatures from key source files so the Claude Code
     # knows which functions/classes/constants MUST be preserved when rewriting
-    # a module.  Without this, the CodeAgent may drop functions that other
+    # a module.  Without this, Claude Code may drop functions that other
     # modules import, causing ImportError at eval time.
     api_signatures = ""
     try:
@@ -1872,48 +1842,14 @@ def _run_single_hypothesis(
         worktree = None
 
     try:
-        # ── Choose code generation backend ────────────────────────
-        if config.use_claude_code:
-            # Claude Code CLI: targeted file edits via Read/Edit tools
-            generated_files = _generate_files_with_claude_code(
-                hyp=hyp,
-                hyp_id=hyp_id,
-                config=config,
-                baseline=baseline,
-                work_dir=work_dir,
-            )
-        else:
-            # Legacy CodeAgent: full 5-phase pipeline
-            llm = _make_llm_client(config)
-            pm = PromptManager()
-            agent_cfg = CodeAgentConfig(
-                enabled=True,
-                architecture_planning=True,
-                sequential_generation=True,
-                hard_validation=True,
-                exec_fix_max_iterations=2,
-                tree_search_enabled=False,
-                review_max_rounds=1,
-                preserve_paths=True,
-            )
-            sandbox_factory = _make_sandbox_factory(config)
-
-            agent = CodeAgent(
-                llm=llm,
-                prompts=pm,
-                config=agent_cfg,
-                stage_dir=work_dir,
-                sandbox_factory=sandbox_factory,
-            )
-
-            agent_result = agent.generate(
-                topic=f"AHVS hypothesis {hyp_id}: {hyp.get('description', '')}",
-                exp_plan=problem,
-                metric=metric_name,
-                pkg_hint=pkg_hint,
-                max_tokens=16384,
-            )
-            generated_files = agent_result.files
+        # ── Generate files via Claude Code CLI ─────────────────────
+        generated_files = _generate_files_with_claude_code(
+            hyp=hyp,
+            hyp_id=hyp_id,
+            config=config,
+            baseline=baseline,
+            work_dir=work_dir,
+        )
 
         # Write generated files to work_dir (with path validation)
         from ahvs.worktree import validate_safe_relpath
@@ -1926,12 +1862,11 @@ def _run_single_hypothesis(
             artifact_paths.append(str(fpath.relative_to(cycle_dir)))
 
         # ── Auto-remap root-level files, then filter forbidden ─────
-        # CodeAgent consistently writes files to the repo root (e.g.
-        # "parsing.py") instead of the correct src/ path (e.g.
-        # "src/autoqa/parsing.py") despite explicit prompt context.
-        # Before blocking, attempt to remap root-level .py files to
-        # their unique src/ counterpart.  Only remap when exactly one
-        # match exists under src/ to avoid ambiguity.
+        # LLM-generated code sometimes writes files to the repo root
+        # (e.g. "parsing.py") instead of the correct src/ path (e.g.
+        # "src/autoqa/parsing.py"). Before blocking, attempt to remap
+        # root-level .py files to their unique src/ counterpart. Only
+        # remap when exactly one match exists under src/ to avoid ambiguity.
         _repo_has_src = (config.repo_path / "src").is_dir()
         remapped_files: dict[str, str] = {}
         for filename, content in generated_files.items():
@@ -1983,7 +1918,7 @@ def _run_single_hypothesis(
             )
 
         # Filter out syntactically invalid Python files before applying to
-        # worktree — the CodeAgent may return truncated output that passed
+        # worktree — Claude Code may return truncated output that passed
         # hard_validation's max-repair limit.
         valid_files = {}
         for filename, content in filtered_files.items():
@@ -2008,7 +1943,7 @@ def _run_single_hypothesis(
 
         # ── Pre-eval import sanity check ──────────────────────────────
         # After applying files, verify the eval module can still import.
-        # If CodeAgent broke imports (circular, missing, syntax in spliced
+        # If Claude Code broke imports (circular, missing, syntax in spliced
         # file), fail early with a clear message instead of a cryptic eval
         # crash.
         if worktree is not None and eval_command:
@@ -2016,12 +1951,12 @@ def _run_single_hypothesis(
             if import_err is not None:
                 logger.error(
                     "%s: PRE-EVAL IMPORT CHECK FAILED — %s. "
-                    "CodeAgent changes broke the module structure.",
+                    "Claude Code changes broke the module structure.",
                     hyp_id, import_err,
                 )
                 print(
                     f"[AHVS] {hyp_id}: pre-eval import check FAILED — "
-                    f"CodeAgent changes broke module imports. "
+                    f"Claude Code changes broke module imports. "
                     f"Skipping eval_command."
                 )
                 # Mark as extraction_failed — don't run eval on broken code
@@ -2042,7 +1977,7 @@ def _run_single_hypothesis(
 
         # When eval_command is configured, it is the ONLY trusted measurement
         # source.  Tiers 1-3 (sandbox self-reports) are unconditionally
-        # skipped because CodeAgent can fabricate result.json with false
+        # skipped because Claude Code can fabricate result.json with false
         # metrics (Bug L: false 0.9928 precision when eval actually crashed).
         eval_command_is_authoritative = bool(eval_command)
 
@@ -2072,11 +2007,8 @@ def _run_single_hypothesis(
                     eval_result.stderr[:300],
                 )
 
-        # Tiers 1-3: Sandbox self-reports — ONLY used when no eval_command
-        # is configured.  When eval_command exists, these are unconditionally
-        # skipped to prevent CodeAgent from fabricating metrics.
+        # Fallback: result.json in work_dir (used when no eval_command)
         if not eval_command_is_authoritative:
-            # Tier 1: result.json in work_dir
             result_json_path = work_dir / "result.json"
             if not result_json_path.exists():
                 for candidate in sorted(work_dir.glob("agent_runs/*/result.json")):
@@ -2090,42 +2022,20 @@ def _run_single_hypothesis(
                     metric_value = extracted
                     measurement_status = "measured"
 
-            # Tier 2: Direct from sandbox-parsed metrics
-            if measurement_status != "measured" and agent_result.best_metrics:
-                val = agent_result.best_metrics.get(metric_name)
-                if isinstance(val, (int, float)):
-                    metric_value = float(val)
-                    measurement_status = "measured"
-
-            # Tier 3: Parse raw sandbox stdout
-            if measurement_status != "measured" and agent_result.best_stdout:
-                extracted = _extract_metric_from_output(agent_result.best_stdout, metric_name)
-                if extracted is not None:
-                    metric_value = extracted
-                    measurement_status = "measured"
-
-        # Tier 4: Extraction failed — log warning, keep baseline
+        # Extraction failed — log warning, keep baseline
         if measurement_status != "measured":
             measurement_status = "extraction_failed"
-            if eval_command_is_authoritative:
-                logger.warning(
-                    "%s: eval_command did not produce a valid metric — "
-                    "metric_value remains at baseline (%.4f). "
-                    "Sandbox self-reports are NOT used when eval_command is configured.",
-                    hyp_id, baseline_value,
-                )
-            else:
-                logger.warning(
-                    "%s: metric extraction failed across all sources — "
-                    "metric_value remains at baseline (%.4f). "
-                    "Hypothesis code may not have produced output.",
-                    hyp_id, baseline_value,
-                )
+            logger.warning(
+                "%s: metric extraction failed — metric_value remains "
+                "at baseline (%.4f). Hypothesis code may not have "
+                "produced a valid metric.",
+                hyp_id, baseline_value,
+            )
 
     except Exception as exc:  # noqa: BLE001
-        error = f"CodeAgent execution failed: {exc}"
+        error = f"Hypothesis execution failed: {exc}"
         measurement_status = "sandbox_error"
-        logger.exception("CodeAgent failed for %s", hyp_id)
+        logger.exception("Hypothesis execution failed for %s", hyp_id)
 
     duration = time.monotonic() - t0
 

@@ -226,35 +226,3 @@ class AHVSPromptManager:
             json_mode=entry.get("json_mode", False),
             max_tokens=entry.get("max_tokens"),
         )
-
-
-# ---------------------------------------------------------------------------
-# PromptManager (minimal stub for legacy CodeAgent path)
-# ---------------------------------------------------------------------------
-
-
-class PromptManager:
-    """Minimal PromptManager stub for legacy CodeAgent compatibility.
-
-    Supports ``for_stage(stage_name, **kwargs) -> RenderedPrompt``.
-    Returns a generic code-generation prompt for any stage name.
-    """
-
-    def for_stage(self, stage_name: str, **kwargs: Any) -> RenderedPrompt:
-        """Return a generic code-generation prompt for the given stage."""
-        kw = {k: str(v) for k, v in kwargs.items()}
-        context = "\n".join(f"- {k}: {v}" for k, v in kw.items()) if kw else "(none)"
-        return RenderedPrompt(
-            system=(
-                "You are an expert software engineer. Generate clean, correct, "
-                "well-documented code for the given task. Follow best practices "
-                "and ensure the code is production-ready."
-            ),
-            user=(
-                f"# Task: {stage_name}\n\n"
-                f"## Context\n{context}\n\n"
-                "Generate the required code changes. Be precise and complete."
-            ),
-            json_mode=False,
-            max_tokens=4000,
-        )

@@ -1,7 +1,7 @@
 """HypothesisWorktree — manages a git worktree for one AHVS hypothesis.
 
-Each hypothesis gets a detached worktree at repo HEAD where CodeAgent-generated
-files are applied, the eval_command is run, and a diff/patch is captured.
+Each hypothesis gets a detached worktree at repo HEAD where generated files
+are applied, the eval_command is run, and a diff/patch is captured.
 The worktree is cleaned up unless it produced the best improvement.
 """
 
@@ -45,12 +45,12 @@ def validate_safe_relpath(relpath: str, root: Path) -> None:
 
     if pure.is_absolute():
         raise ValueError(
-            f"Refusing absolute path from CodeAgent output: {relpath!r}"
+            f"Refusing absolute path from Claude Code output: {relpath!r}"
         )
 
     if ".." in pure.parts:
         raise ValueError(
-            f"Refusing path with '..' traversal from CodeAgent output: {relpath!r}"
+            f"Refusing path with '..' traversal from Claude Code output: {relpath!r}"
         )
 
     dest_resolved = (root / relpath).resolve()
@@ -71,7 +71,7 @@ def splice_functions(original_src: str, partial_src: str) -> str:
     """Merge *partial_src* (containing only modified definitions) into
     *original_src*, returning the full updated file.
 
-    The CodeAgent is instructed to output only the functions, classes, and
+    The Claude Code is instructed to output only the functions, classes, and
     constants it modifies — not the entire file.  This function splices those
     fragments into the original source by:
 
@@ -336,7 +336,7 @@ class HypothesisWorktree:
                 f"eval_cwd {self.eval_cwd} does not exist.  "
                 f"Git root: {git_root}, subdir: {subdir}. "
                 "Check that the repo subdir is tracked on the current HEAD "
-                "and that the CodeAgent did not delete it during generation."
+                "and that Claude Code did not delete it during generation."
             )
 
     def read_file(self, relpath: str) -> str | None:
@@ -355,21 +355,21 @@ class HypothesisWorktree:
         *,
         splice: bool = False,
     ) -> list[Path]:
-        """Write CodeAgent-generated files into the worktree.
+        """Write Claude Code-generated files into the worktree.
 
         *files* maps repo-relative paths to file contents.  When repo_path is
         a subdirectory of the git root, paths are resolved relative to
         ``eval_cwd`` (the repo subdir within the worktree) so that
-        CodeAgent-generated paths like ``src/autoqa/parsing.py`` land at
+        Claude Code-generated paths like ``src/autoqa/parsing.py`` land at
         ``{worktree}/{repo_subdir}/src/autoqa/parsing.py`` rather than the
         wrong location at the worktree root.
 
-        When the CodeAgent generates a bare filename (e.g. ``parsing.py``)
+        When Claude Code generates a bare filename (e.g. ``parsing.py``)
         that doesn't match an existing file at ``{eval_cwd}/parsing.py`` but
         DOES match exactly one existing file deeper in the tree (e.g.
         ``{eval_cwd}/src/autoqa/parsing.py``), the file is written to the
         existing location instead.  This handles the common case where the
-        CodeAgent strips directory prefixes from filenames.
+        Claude Code strips directory prefixes from filenames.
 
         If *splice* is True, the content is treated as **partial output**
         containing only modified functions/classes/constants.  The partial
@@ -414,7 +414,7 @@ class HypothesisWorktree:
                     matched = candidates[0]
                     logger.info(
                         "apply_files: remapped %r → %s (smart match — "
-                        "CodeAgent used bare filename instead of full path)",
+                        "Claude Code used bare filename instead of full path)",
                         relpath, matched.relative_to(base_resolved),
                     )
                     dest = matched
@@ -480,7 +480,7 @@ class HypothesisWorktree:
                 f"eval_cwd does not exist: {self.eval_cwd}. "
                 f"worktree_path={self.worktree_path}. "
                 "The git worktree may not have checked out the expected subdir, "
-                "or the CodeAgent may have deleted it."
+                "or Claude Code may have deleted it."
             )
             logger.error(msg)
             return EvalResult(

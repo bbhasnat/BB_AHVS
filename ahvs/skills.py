@@ -1,12 +1,12 @@
-"""AHVS Skill Library — pre-built skill templates injected into CodeAgent context.
+"""AHVS Skill Library — pre-built skill templates injected into execution context.
 
-Skills tell CodeAgent what tools are available and how to invoke them.
-CodeAgent reads skill descriptions in its context, picks the right skill
-for the hypothesis type, and references it in its implementation plan.
+Skills describe what tools are available and how to invoke them. Claude Code
+reads skill descriptions in its context, picks the right skill for the
+hypothesis type, and references it in its implementation plan.
 
 Note: Skills are informational guidance, not executable dispatch. AHVS does
-not resolve or enforce skill invocations at runtime — CodeAgent decides
-what to execute based on the skill descriptions in its prompt.
+not resolve or enforce skill invocations at runtime — the execution agent
+decides what to execute based on the skill descriptions in its prompt.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SkillSpec:
-    """A single skill available to CodeAgent during hypothesis execution."""
+    """A single skill available during hypothesis execution."""
 
     name: str
     description: str
@@ -103,7 +103,7 @@ BUILTIN_SKILLS: list[SkillSpec] = [
             "  output_path: tool_runs/{hypothesis_id}/sandbox_output.json"
         ),
         applicable_types=("code_change", "architecture_change", "multi_llm_judge"),
-        required_tools=(),  # uses local ExperimentSandbox, not Docker
+        required_tools=(),  # runs locally, no Docker
     ),
     SkillSpec(
         name="regression_guard",
@@ -220,7 +220,7 @@ class SkillLibrary:
         return available
 
     def to_context_block(self, skills: list[SkillSpec]) -> str:
-        """Render skills as a context block for injection into CodeAgent's prompt."""
+        """Render skills as a context block for injection into the execution prompt."""
         if not skills:
             return ""
         lines = [

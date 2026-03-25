@@ -7,7 +7,7 @@ Covers:
   4. HypothesisWorktree lifecycle (create, apply_files, capture_diff, cleanup)
   5. Checkpoint write/read/resume round-trip
   6. Stage dispatcher routing (all 8 stages have handlers)
-  7. One end-to-end cycle with mocked LLM and CodeAgent
+  7. One end-to-end cycle with mocked LLM and Claude Code
   8. Bug A regression: apply_files writes to eval_cwd subdir, not worktree root
   9. Bug C regression: missing eval_cwd surfaces clear error (create + run_eval_command)
  10. Bug E regression: splice_functions merges partial output correctly
@@ -256,9 +256,9 @@ class TestHypothesisResult:
             hypothesis_type="prompt_rewrite",
             primary_metric="f1",
             baseline_value=0.70,
-            error="CodeAgent crashed",
+            error="Claude Code crashed",
         )
-        assert r.error == "CodeAgent crashed"
+        assert r.error == "Claude Code crashed"
         assert r.delta == 0.0
         assert r.improved is False
         assert r.measurement_status == "sandbox_error"
@@ -2002,7 +2002,7 @@ class TestBugC_EvalCwdExistenceCheck:
         wt = HypothesisWorktree(repo, wt_path)
         wt.create()
 
-        # Simulate eval_cwd being deleted (e.g., CodeAgent wiped the subdir)
+        # Simulate eval_cwd being deleted (e.g., Claude Code wiped the subdir)
         wt.eval_cwd = wt_path / "nonexistent_subdir"
 
         result = wt.run_eval_command("echo hello")
@@ -2014,7 +2014,7 @@ class TestBugC_EvalCwdExistenceCheck:
 
 
 class TestBugE_SpliceFunctions:
-    """Bug E regression: splice_functions must correctly merge partial CodeAgent
+    """Bug E regression: splice_functions must correctly merge partial Claude Code
     output into existing files without truncation or API loss.
     """
 
@@ -2692,7 +2692,7 @@ class TestHardenedMetricExtraction:
         assert "not eval_command_is_authoritative" in source
 
     def test_prompt_mentions_protected_files(self) -> None:
-        """The CodeAgent prompt should mention protected/forbidden files."""
+        """The Claude Code prompt should mention protected/forbidden files."""
         import inspect
         from ahvs.executor import _run_single_hypothesis
 

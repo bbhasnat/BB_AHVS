@@ -1,9 +1,9 @@
 """ahvs — Adaptive Hypothesis Validation System.
 
 AHVS is an 8-stage cyclic hypothesis-validation pipeline that composes
-infrastructure (CodeAgent, EvolutionStore, LLMClient, sandbox) to
-autonomously generate, select, execute, and evaluate hypotheses that improve
-a target LLM/RAG system's primary metric.
+infrastructure (Claude Code CLI, EvolutionStore, LLMClient) to autonomously
+generate, select, execute, and evaluate hypotheses that improve a target
+LLM/RAG system's primary metric.
 
 Public API
 ----------

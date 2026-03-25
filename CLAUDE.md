@@ -36,7 +36,7 @@ All AHVS project-specific memory lives in the **target repo**, not in Claude's m
 
 - **Never auto-approve hypotheses in multi-agent mode.** Always show the browser GUI for hypothesis selection unless the user explicitly says "auto-approve" or "skip selection".
 - **Write bugs/lessons in real time**, not as a batch at session end. The conversation output is not memory — it disappears. The files are memory.
-- **Claude Code is the default code agent** for hypothesis execution. Use `--use-sandbox-agent` to fall back to the legacy sandbox CodeAgent.
+- **Claude Code is the code agent** for hypothesis execution (via `claude` CLI).
 
 ## Package Structure
 
@@ -56,9 +56,6 @@ ahvs/
 ├── worktree.py           # Git worktree lifecycle
 ├── hypothesis_selector.py # Browser GUI for hypothesis selection
 ├── evolution.py          # Cross-cycle lesson storage (EvolutionStore)
-├── sandbox.py            # Legacy sandbox agent
-├── sandbox_config.py     # Sandbox configuration dataclasses
-├── code_agent.py         # Legacy CodeAgent
 ├── llm/                  # LLM client factory
 │   ├── __init__.py       # create_llm_client() factory
 │   ├── client.py         # OpenAI-compatible LLMClient

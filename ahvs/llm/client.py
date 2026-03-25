@@ -389,37 +389,3 @@ class LLMClient:
             truncated=(choice.get("finish_reason", "") == "length"),
             raw=data,
         )
-
-
-def create_client_from_yaml(yaml_path: str | None = None) -> LLMClient:
-    """Create an LLMClient from a YAML config file.
-
-    Reads base_url and api_key from the config file's llm section.
-    """
-    import yaml as _yaml
-
-    if yaml_path is None:
-        yaml_path = "config.yaml"
-
-    with open(yaml_path, encoding="utf-8") as f:
-        raw = _yaml.safe_load(f)
-
-    llm_section = raw.get("llm", {})
-    api_key = str(
-        os.environ.get(
-            llm_section.get("api_key_env", "OPENAI_API_KEY"),
-            llm_section.get("api_key", ""),
-        )
-        or ""
-    )
-
-    return LLMClient(
-        LLMConfig(
-            base_url=llm_section.get("base_url", "https://api.openai.com/v1"),
-            api_key=api_key,
-            primary_model=llm_section.get("primary_model", "gpt-4o"),
-            fallback_models=llm_section.get(
-                "fallback_models", ["gpt-4.1", "gpt-4o-mini"]
-            ),
-        )
-    )

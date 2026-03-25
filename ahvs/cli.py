@@ -29,7 +29,6 @@ def cmd_ahvs(args: argparse.Namespace) -> int:
         regression_guard_path=_Path(args.regression_guard).resolve() if args.regression_guard else None,
         allow_sandbox_only=getattr(args, "allow_sandbox_only", False),
         apply_best=getattr(args, "apply_best", False),
-        use_claude_code=not getattr(args, "use_sandbox_agent", False),
         skill_registry_path=_Path(args.skill_registry).resolve() if args.skill_registry else None,
         prompts_override_path=_Path(args.prompts).resolve() if args.prompts else None,
         llm_provider=args.provider or "anthropic",
@@ -334,14 +333,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--allow-sandbox-only", action="store_true",
         help="Allow sandbox-only fallback when git worktree creation fails",
-    )
-    parser.add_argument(
-        "--use-sandbox-agent", action="store_true",
-        help=(
-            "Use the legacy sandbox CodeAgent instead of Claude Code CLI "
-            "for code_change hypotheses.  By default, AHVS uses Claude Code "
-            "which makes targeted file edits via Read/Edit tools."
-        ),
     )
     parser.add_argument(
         "--apply-best", action="store_true",

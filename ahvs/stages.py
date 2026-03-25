@@ -83,7 +83,7 @@ class AHVSStage(IntEnum):
     AHVS_HYPOTHESIS_GEN  = 3  # Typed hypothesis generation (1–5)
     AHVS_HUMAN_SELECTION = 4  # GATE: human selects hypotheses to run
     AHVS_VALIDATION_PLAN = 5  # Per-hypothesis implementation spec + eval method
-    AHVS_EXECUTION       = 6  # CodeAgent executes each selected hypothesis
+    AHVS_EXECUTION       = 6  # Claude Code executes each selected hypothesis
     AHVS_REPORT_MEMORY   = 7  # LLM report + EvolutionStore lesson archival
     AHVS_CYCLE_VERIFY    = 8  # Contract validation of all artifacts
 

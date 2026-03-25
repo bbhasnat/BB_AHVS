@@ -69,8 +69,8 @@ HYPOTHESIS_TOOL_REQUIREMENTS: dict[str, list[str]] = {
     "config_change":       ["promptfoo"],
     "dspy_optimize":       ["dspy", "promptfoo"],
     "phoenix_eval":        ["arize-phoenix"],
-    # code_change, architecture_change, multi_llm_judge use the local
-    # ExperimentSandbox (python3), not Docker.  No external tool required.
+    # code_change, architecture_change, multi_llm_judge run via Claude Code.
+    # No external tool required.
     "code_change":         [],
     "architecture_change": [],
     "multi_llm_judge":     [],
