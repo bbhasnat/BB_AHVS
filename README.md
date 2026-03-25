@@ -62,17 +62,19 @@ AHVS is a self-contained package with no external framework dependencies. Its co
 
 ### Code agent: Claude Code
 
-AHVS uses Claude Code CLI (`claude -p`) as its code execution backend. It runs as a subprocess with read/edit/search tools scoped to the target repo, editing files in-place with surgical precision.
+AHVS uses Claude Code CLI (`claude -p`) as its code execution backend. Claude Code runs **inside the hypothesis worktree** (not the live target repo), so the main repository is never modified during execution. It operates as a subprocess with Read/Edit/Glob/Grep tools scoped to the worktree directory.
+
+Before granting Claude Code access, AHVS runs a **secret-scan preflight** that checks for `.env`, `*.pem`, `*.key`, `credentials.json`, and other common secret-file patterns. If potential secrets are detected, a visible warning is emitted.
 
 Claude Code receives:
 
 - The hypothesis description and implementation plan
 - The available **skill library** (which tools exist and how to invoke them)
 - A required output contract (`result.json` with the metric as a float)
-- Instructions that generated files will be applied to a git worktree (repo-relative paths)
+- The full source tree (via the worktree, which is a copy of the repo at HEAD)
 - The `eval_command` that will measure the result in the worktree
 
-The generated files are applied to a **detached git worktree** of the target repo (created at HEAD with `git worktree add --detach`), and the `eval_command` from `baseline_metric.json` is executed inside that worktree to produce a real measurement.
+After Claude Code edits files in the worktree, AHVS captures **all** modified files (Python, YAML, JSON, config, templates — not just `.py`), reverts the worktree to clean state, then re-applies the changes through its safety pipeline (forbidden-file filter, syntax validation, AST-based splice). The `eval_command` from `baseline_metric.json` is then executed inside the worktree to produce a real measurement.
 
 ### Worktree execution model
 
@@ -735,12 +737,20 @@ When `eval_command` is configured, it is the **only trusted measurement source**
 | `run_dir` | `Path` | `<repo>/.ahvs/cycles/<ts>` | Cycle output directory |
 | `max_hypotheses` | `int` | `3` | Max hypotheses to generate (hard cap: 5) |
 | `regression_guard_path` | `Path \| None` | `None` | Path to regression guard script |
+| `allow_no_worktree` | `bool` | `False` | Continue without worktree if creation fails (non-git targets) |
+| `apply_best` | `bool` | `False` | Auto-apply best improving hypothesis patch after cycle |
 | `skill_registry_path` | `Path \| None` | `None` | Custom skills YAML |
 | `prompts_override_path` | `Path \| None` | `None` | AHVS prompts override YAML |
+| `llm_provider` | `str` | `"anthropic"` | LLM provider (`anthropic`, `openai`, `openrouter`, `deepseek`, `acp`) |
 | `llm_model` | `str` | `"claude-opus-4-6"` | LLM model ID |
 | `llm_api_key_env` | `str` | `"ANTHROPIC_API_KEY"` | API key env var name |
 | `llm_base_url` | `str` | `""` | Override LLM base URL |
 | `llm_api_key` | `str` | `""` | Inline API key (prefer env var) |
+| `acp_agent` | `str` | `"claude"` | ACP agent CLI name (only with `provider=acp`) |
+| `acp_cwd` | `str` | `"."` | ACP working directory (resolved to `repo_path`) |
+| `acpx_command` | `str` | `""` | Path to acpx binary (auto-detect if empty) |
+| `acp_session_name` | `str` | `"ahvs"` | ACP session name |
+| `acp_timeout_sec` | `int` | `1800` | ACP per-prompt timeout in seconds |
 
 ### Derived paths (automatic)
 
@@ -931,8 +941,15 @@ ahvs \
 
 When the cycle completes successfully and a hypothesis improved the metric, AHVS will:
 1. Run `git apply` with the best hypothesis patch on your working tree
-2. Update `.ahvs/baseline_metric.json` with the new metric value and commit SHA
+2. Update `.ahvs/baseline_metric.json` with the new metric value and provenance fields:
+   - `commit` — the pre-patch HEAD (the patch is applied but not committed)
+   - `commit_note` — explains that the working tree includes an uncommitted patch
+   - `applied_patch` — relative path to the `.patch` file
+   - `applied_hypothesis` — ID of the winning hypothesis
+   - `applied_from_cycle` — cycle directory name
 3. Print a confirmation of what was applied
+
+> **Note:** The recorded `commit` is the pre-patch HEAD because `--apply-best` does not auto-commit. Commit the changes yourself to make the baseline provenance fully clean.
 
 **Manual promotion:**
 
@@ -1095,6 +1112,8 @@ If either the original or partial file has syntax errors, the merge falls back g
 ### Test coverage
 
 211 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, and regression tests for all known framework bugs.
+
+Tests work from a fresh checkout — no `pip install -e .` or `PYTHONPATH` required (`conftest.py` bootstraps the import path):
 
 ```bash
 python -m pytest tests/test_ahvs.py -v
