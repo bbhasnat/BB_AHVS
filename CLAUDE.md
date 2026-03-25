@@ -56,6 +56,9 @@ ahvs/
 ├── worktree.py           # Git worktree lifecycle
 ├── hypothesis_selector.py # Browser GUI for hypothesis selection
 ├── evolution.py          # Cross-cycle lesson storage (EvolutionStore)
+├── domain_packs/         # Domain-specific prompt + skill overrides
+│   ├── ml_prompts.yaml   # Traditional ML hypothesis prompts
+│   └── ml_skills.yaml    # ML skill templates (sklearn, optuna, etc.)
 ├── llm/                  # LLM client factory
 │   ├── __init__.py       # create_llm_client() factory
 │   ├── client.py         # OpenAI-compatible LLMClient

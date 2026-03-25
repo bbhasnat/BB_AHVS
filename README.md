@@ -463,6 +463,7 @@ ahvs [options]
 | `--until-stage` | *(last stage)* | Stop after this stage (e.g. `AHVS_HYPOTHESIS_GEN`). Useful for split workflows — generate hypotheses, select via GUI, then resume. |
 | `--resume` | off | Resume from last written checkpoint |
 | `--regression-guard` | none | Path to regression guard shell script |
+| `--domain` | *(none)* | Domain pack: `llm` (default) or `ml` (traditional ML). Sets prompts + skills automatically. |
 | `--skill-registry` | none | Path to custom skill registry YAML |
 | `--prompts` | none | Path to AHVS prompts override YAML |
 | `--model` | `claude-opus-4-6` | LLM model ID |
@@ -554,6 +555,36 @@ This means the taxonomy controls *what Claude Code is instructed to do*, not *wh
 ### Pre-flight tool checks
 
 AHVS runs a secondary pre-flight check *after* hypothesis selection (Stage 4) to verify the tools needed for selected hypothesis types are available. This check skips the LLM connectivity test (already verified at Stage 1) and focuses only on tool availability. If a tool is missing, AHVS warns and asks for confirmation before proceeding.
+
+### Domain packs: using AHVS with traditional ML models
+
+By default, AHVS is tuned for LLM/RAG optimization. To use it with traditional ML models (classifiers, regressors, ranking models), use the `--domain ml` flag:
+
+```bash
+ahvs \
+  --repo /path/to/my-classifier \
+  --question "Improve F1 score on the churn prediction model" \
+  --domain ml \
+  --max-hypotheses 3
+```
+
+This loads the ML domain pack, which:
+- **Overrides hypothesis generation prompts** — focuses on feature engineering, hyperparameter tuning, algorithm selection, sampling strategies, and pipeline architecture instead of LLM prompts and retrieval
+- **Restricts hypothesis types** to `code_change`, `config_change`, and `architecture_change` (excludes LLM-specific types like `prompt_rewrite`, `dspy_optimize`, etc.)
+- **Provides ML-specific skill templates** — `sklearn_eval`, `hyperparameter_sweep`, `feature_importance`, `confusion_matrix`, `cross_validate`
+
+The domain pack files live in `ahvs/domain_packs/`:
+- `ml_prompts.yaml` — hypothesis generation and validation plan prompts
+- `ml_skills.yaml` — ML tool descriptions for Claude Code's context
+
+You can also use them explicitly:
+```bash
+ahvs --repo . --question "..." \
+  --prompts ahvs/domain_packs/ml_prompts.yaml \
+  --skill-registry ahvs/domain_packs/ml_skills.yaml
+```
+
+The core pipeline (worktrees, eval_command, metric extraction, cross-cycle memory) works identically for ML and LLM targets. Only the hypothesis generation and skill context differ.
 
 ---
 
@@ -800,6 +831,9 @@ ahvs/
 ├── runner.py                # execute_ahvs_cycle() — outer orchestration loop
 ├── evolution.py             # EvolutionStore — cross-cycle memory persistence
 ├── cli.py                   # CLI entry point (ahvs command)
+├── domain_packs/            # Domain-specific prompt + skill overrides
+│   ├── ml_prompts.yaml      # Traditional ML hypothesis prompts (--domain ml)
+│   └── ml_skills.yaml       # ML skill templates (sklearn, optuna, etc.)
 ├── llm/                     # LLM client factory
 │   ├── __init__.py
 │   ├── client.py            # Provider-agnostic LLM client

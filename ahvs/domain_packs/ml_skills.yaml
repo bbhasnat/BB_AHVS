@@ -1,0 +1,114 @@
+# AHVS Skill Registry — Traditional ML Domain Pack
+#
+# Use with: ahvs --repo . --question "..." --skill-registry ahvs/domain_packs/ml_skills.yaml
+#
+# These skills describe ML-specific tools and patterns. They are injected into
+# Claude Code's prompt context alongside (or replacing) the built-in LLM skills.
+
+skills:
+  - name: sklearn_eval
+    description: >
+      Run a scikit-learn model evaluation pipeline. Load the trained model,
+      run predictions on the test set, and compute classification/regression
+      metrics (accuracy, F1, precision, recall, AUC, RMSE, MAE).
+      Print the primary metric as "metric_name: value" to stdout.
+      Use for: code_change, config_change, architecture_change.
+    invocation_template: |
+      SKILL: sklearn_eval
+        eval_script: <path to eval script>
+        model_path: <path to trained model (.pkl, .joblib)>
+        test_data: <path to test dataset>
+        metric_key: <primary metric name>
+        output_path: tool_runs/{hypothesis_id}/eval_output.json
+    applicable_types:
+      - code_change
+      - config_change
+      - architecture_change
+    required_tools: []
+
+  - name: hyperparameter_sweep
+    description: >
+      Run a hyperparameter sweep using Optuna or GridSearchCV.
+      Define the search space, run the optimization, and report the best
+      parameters and their metric value. Print results as JSON to stdout.
+      Use for: config_change.
+    invocation_template: |
+      SKILL: hyperparameter_sweep
+        search_space: <dict of param_name: [values] or distributions>
+        n_trials: <number of Optuna trials, default 50>
+        cv_folds: <cross-validation folds, default 5>
+        metric_key: <primary metric to optimize>
+        output_path: tool_runs/{hypothesis_id}/sweep_results.json
+    applicable_types:
+      - config_change
+    required_tools:
+      - optuna
+
+  - name: feature_importance
+    description: >
+      Compute and report feature importances using the trained model.
+      Supports tree-based importances, permutation importance, and SHAP values.
+      Use this to inform feature engineering hypotheses — identify which features
+      matter and which can be dropped or transformed.
+    invocation_template: |
+      SKILL: feature_importance
+        model_path: <path to trained model>
+        test_data: <path to test dataset>
+        method: permutation  # or tree, shap
+        output_path: tool_runs/{hypothesis_id}/feature_importance.json
+    applicable_types:
+      - code_change
+      - architecture_change
+    required_tools: []
+
+  - name: confusion_matrix
+    description: >
+      Generate a confusion matrix and per-class metrics (precision, recall, F1)
+      for a classification model. Useful for diagnosing which classes are
+      underperforming and guiding targeted improvements.
+    invocation_template: |
+      SKILL: confusion_matrix
+        model_path: <path to trained model>
+        test_data: <path to test dataset>
+        output_path: tool_runs/{hypothesis_id}/confusion_matrix.json
+    applicable_types:
+      - code_change
+      - config_change
+      - architecture_change
+    required_tools: []
+
+  - name: cross_validate
+    description: >
+      Run k-fold cross-validation to get a statistically robust metric estimate.
+      Reports mean, std, and per-fold scores. Use when a single train/test split
+      may not be reliable enough to detect small improvements.
+    invocation_template: |
+      SKILL: cross_validate
+        model_builder: <path to script that builds and returns the model>
+        dataset: <path to full dataset>
+        k_folds: 5
+        metric_key: <primary metric>
+        output_path: tool_runs/{hypothesis_id}/cv_results.json
+    applicable_types:
+      - code_change
+      - config_change
+      - architecture_change
+    required_tools: []
+
+  - name: local_run
+    description: >
+      Execute a Python script locally and capture stdout as JSON metrics.
+      The script must print a JSON object to stdout as its final line,
+      containing at least the primary metric key as a float.
+      This is the generic fallback for any ML evaluation.
+    invocation_template: |
+      SKILL: local_run
+        entry_point: <path to Python entry script>
+        output_schema: {"<primary_metric>": float}
+        timeout_seconds: 600
+        output_path: tool_runs/{hypothesis_id}/output.json
+    applicable_types:
+      - code_change
+      - config_change
+      - architecture_change
+    required_tools: []
