@@ -2103,7 +2103,7 @@ def _run_single_hypothesis(
                     "%s: eval_command exited %d — marking extraction_failed. "
                     "stderr: %s",
                     hyp_id, eval_result.returncode,
-                    eval_result.stderr[:300],
+                    eval_result.stderr[:2000],
                 )
 
         # Fallback: result.json in work_dir (used when no eval_command)
