@@ -1125,7 +1125,8 @@ AHVS already has a strong generic execution contract: repo + baseline metric + `
 The `--domain` flag and YAML-based domain packs (`ahvs/domain_packs/`) provide the adapter mechanism. Two domain packs are available: `llm` (default, LLM/RAG optimization) and `ml` (traditional ML — classifiers, regressors, NLP, CV, time series, etc.). For specialized tool chains (e.g., Hugging Face Trainer, torchvision augmentation), use `--skill-registry` with a project-specific YAML. Remaining work:
 
 1. **Multi-metric optimization** — Preserve the current primary-metric contract, but add first-class support for Pareto-optimal selection across multiple metrics (e.g., precision *and* recall, accuracy *and* latency)
-2. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression) so users can see the full onboarding → cycle → results flow
+2. **Data analytics domain (exploratory)** — Investigate whether AHVS can drive data-focused hypothesis cycles: dataset selection, feature subset optimization, preprocessing pipeline tuning, data augmentation experiments. These fit the current loop well when there's a clear downstream metric (e.g., "which cleaning pipeline gives the best F1?"). Open-ended exploration (EDA, pattern discovery) would need a different output contract since AHVS currently requires a single numeric metric. A `data_prompts.yaml` pack would be the first step; structural changes only if prompt-level framing proves insufficient.
+3. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression, data preprocessing) so users can see the full onboarding → cycle → results flow
 
 ### Browser-based hypothesis selector
 
