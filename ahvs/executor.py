@@ -304,21 +304,57 @@ def _remap_root_file(basename: str, repo_path: "Path") -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Secret-scan preflight
+# ---------------------------------------------------------------------------
+
+# File patterns that may contain secrets — warn before granting agent access
+_SECRET_FILE_PATTERNS: tuple[str, ...] = (
+    ".env", ".env.*", "*.secret", "*.pem", "*.key",
+    "credentials.json", "service_account.json", "secrets.yaml",
+    "secrets.yml", ".netrc", ".npmrc", ".pypirc",
+)
+
+
+def _scan_for_secrets(target_dir: Path) -> list[str]:
+    """Quick scan for files that may contain secrets.
+
+    Returns a list of warning strings (empty if clean).
+    """
+    warnings: list[str] = []
+    for pattern in _SECRET_FILE_PATTERNS:
+        for match in target_dir.glob(pattern):
+            if match.is_file() and ".git" not in match.parts:
+                warnings.append(str(match.relative_to(target_dir)))
+    # Also check for common secret patterns in tracked .env* files
+    for envfile in target_dir.glob(".env*"):
+        if envfile.is_file() and envfile.stat().st_size > 0:
+            warnings.append(str(envfile.relative_to(target_dir)))
+    return sorted(set(warnings))
+
+
 def _generate_files_with_claude_code(
     hyp: dict[str, Any],
     hyp_id: str,
     config: "AHVSConfig",
     baseline: dict[str, Any],
     work_dir: Path,
+    worktree_path: Path | None = None,
 ) -> dict[str, str]:
     """Use Claude Code CLI to make targeted file edits for a hypothesis.
 
-    Instead of a full code-generation pipeline (blueprint → generate → sandbox),
-    this invokes ``claude -p`` with a focused prompt that reads the target
-    file and applies the specific change described in the hypothesis.
+    When *worktree_path* is provided, Claude Code runs inside the isolated
+    worktree so the live target repo is never modified.  Changes are captured
+    via ``git diff`` in the worktree, then reverted — the safety pipeline
+    (forbidden-file filter, syntax validation, AST splice) applies them back.
 
-    Returns a dict mapping relative file paths → modified file content,
-    matching a ``dict[str, str]`` (filename → content) interface.
+    When *worktree_path* is ``None`` (no-worktree fallback), Claude Code runs
+    against the live repo and changes are captured/reverted there.
+
+    All modified file types are captured (not just ``*.py``), so prompt
+    templates, config files, and other non-Python edits are included.
+
+    Returns a dict mapping relative file paths → modified file content.
     """
     import json as _json
     import shutil
@@ -330,16 +366,33 @@ def _generate_files_with_claude_code(
             "claude CLI not found — install Claude Code"
         )
 
+    # Determine the directory Claude Code will operate in.
+    # Prefer the worktree (isolated); fall back to live repo.
+    target_dir = worktree_path if worktree_path is not None else config.repo_path
+
+    # Secret-scan preflight: warn if target dir contains potential secrets
+    secret_warnings = _scan_for_secrets(target_dir)
+    if secret_warnings:
+        logger.warning(
+            "%s: potential secret files detected in target directory: %s. "
+            "Claude Code will have read access to these files.",
+            hyp_id, secret_warnings,
+        )
+        print(
+            f"[AHVS] WARNING: {hyp_id}: potential secret files in target: "
+            f"{', '.join(secret_warnings)}"
+        )
+
     description = hyp.get("description", "")
     hyp_type = hyp.get("type", "code_change")
     metric_name = baseline["primary_metric"]
     baseline_value = baseline["value"]
     eval_command = baseline.get("eval_command", "")
 
-    # Collect repo source files for context
+    # Collect source files for context (scan the target dir)
     src_files = sorted(
-        str(p.relative_to(config.repo_path))
-        for p in config.repo_path.rglob("*.py")
+        str(p.relative_to(target_dir))
+        for p in target_dir.rglob("*.py")
         if ".ahvs" not in p.parts
         and "__pycache__" not in p.parts
         and ".git" not in p.parts
@@ -353,7 +406,7 @@ def _generate_files_with_claude_code(
         f"**Type:** {hyp_type}\n"
         f"**Description:** {description}\n\n"
         f"## Target Repository\n"
-        f"Path: {config.repo_path}\n\n"
+        f"Path: {target_dir}\n\n"
         f"## Existing source files:\n{file_listing}\n\n"
         f"## Eval command (how the metric is measured):\n"
         f"```\n{eval_command}\n```\n\n"
@@ -378,8 +431,8 @@ def _generate_files_with_claude_code(
     )
 
     logger.info(
-        "%s: invoking Claude Code CLI for targeted edit",
-        hyp_id,
+        "%s: invoking Claude Code CLI for targeted edit (dir=%s)",
+        hyp_id, target_dir,
     )
     print(f"[AHVS] {hyp_id}: using Claude Code for targeted file edit")
 
@@ -394,13 +447,13 @@ def _generate_files_with_claude_code(
                 "--dangerously-skip-permissions",
                 "--no-session-persistence",
                 "--max-budget-usd", "0.50",
-                "--add-dir", str(config.repo_path),
+                "--add-dir", str(target_dir),
             ],
             input=prompt,
             capture_output=True,
             text=True,
             timeout=300,
-            cwd=str(config.repo_path),
+            cwd=str(target_dir),
         )
     except subprocess.TimeoutExpired:
         logger.error("%s: Claude Code CLI timed out after 300s", hyp_id)
@@ -415,76 +468,55 @@ def _generate_files_with_claude_code(
             hyp_id, result.returncode, result.stderr[:500],
         )
 
-    # Collect modified files by checking git status in the repo.
-    # Claude Code edits files in-place, so we detect changes via git
-    # and capture the modified content before reverting.
-    #
-    # Note: config.repo_path may be a subdirectory of the git root
-    # (e.g., /repo/autoqa while git root is /repo). We need to:
-    # 1. Find the git root
-    # 2. Run git commands from there
-    # 3. Convert git-relative paths to repo_path-relative paths
+    # Collect ALL modified files by checking git status in the target dir.
+    # Claude Code edits files in-place; we capture changes then revert so
+    # the safety pipeline (forbidden-file filter, syntax check, splice)
+    # can re-apply them with validation.
     try:
-        git_root_result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True,
-            cwd=str(config.repo_path),
-        )
-        git_root = Path(git_root_result.stdout.strip())
-        # repo_path relative to git root (e.g., "autoqa")
-        try:
-            repo_prefix = config.repo_path.relative_to(git_root)
-        except ValueError:
-            repo_prefix = Path(".")
-
         status_result = subprocess.run(
             ["git", "status", "--porcelain"],
             capture_output=True, text=True,
-            cwd=str(git_root),
+            cwd=str(target_dir),
         )
-        # changed_git: paths relative to git root
-        # changed_repo: paths relative to repo_path (what the framework expects)
-        changed_git: list[str] = []
-        changed_repo: list[str] = []
+        changed_paths: list[str] = []
         for line in status_result.stdout.strip().splitlines():
             if not line or len(line) < 4:
                 continue
-            # Porcelain v1 format: "XY <path>" where XY is 2-char status.
-            # Robust extraction: split on whitespace, take everything
-            # after the status prefix.
             parts = line.split(maxsplit=1)
             if len(parts) < 2:
                 continue
-            status_code = parts[0]  # e.g. "M", "AM", "??"
-            git_path = parts[1].strip()
-            if (
-                any(c in status_code for c in "MA")
-                and git_path.endswith(".py")
-            ):
-                changed_git.append(git_path)
-                try:
-                    repo_rel = str(Path(git_path).relative_to(repo_prefix))
-                    changed_repo.append(repo_rel)
-                except ValueError:
-                    changed_git.pop()
+            status_code = parts[0]
+            rel_path = parts[1].strip()
+            # Capture modified and added files of ANY type
+            if any(c in status_code for c in "MA"):
+                changed_paths.append(rel_path)
     except Exception:  # noqa: BLE001
-        git_root = config.repo_path
-        changed_git = []
-        changed_repo = []
+        changed_paths = []
 
     files: dict[str, str] = {}
-    for repo_rel in changed_repo:
-        full_path = config.repo_path / repo_rel
+    for rel_path in changed_paths:
+        full_path = target_dir / rel_path
         if full_path.is_file():
-            files[repo_rel] = full_path.read_text(encoding="utf-8")
+            try:
+                files[rel_path] = full_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                logger.warning(
+                    "%s: skipping binary file %s", hyp_id, rel_path,
+                )
 
-    # Revert the repo to clean state — the worktree pipeline will apply
-    # the files from the dict, not from the working tree
-    if changed_git:
+    # Revert the target dir to clean state — the safety pipeline will
+    # re-apply validated files via worktree.apply_files()
+    if changed_paths:
         try:
             subprocess.run(
-                ["git", "checkout", "--"] + changed_git,
-                cwd=str(git_root),
+                ["git", "checkout", "--"] + changed_paths,
+                cwd=str(target_dir),
+                capture_output=True,
+            )
+            # Also clean up any untracked files Claude Code may have created
+            subprocess.run(
+                ["git", "clean", "-fd", "--"],
+                cwd=str(target_dir),
                 capture_output=True,
             )
         except Exception:  # noqa: BLE001
@@ -1818,10 +1850,10 @@ def _run_single_hypothesis(
         worktree = HypothesisWorktree(config.repo_path, wt_path)
         worktree.create()
     except Exception as exc:  # noqa: BLE001
-        if not config.allow_sandbox_only:
+        if not config.allow_no_worktree:
             logger.error(
                 "%s: worktree creation failed (%s) — failing hypothesis "
-                "(use --allow-sandbox-only to permit sandbox-only fallback)",
+                "(use --allow-no-worktree to continue without a worktree)",
                 hyp_id, exc,
             )
             return (
@@ -1835,20 +1867,23 @@ def _run_single_hypothesis(
                 None,
             )
         logger.warning(
-            "%s: worktree creation failed (%s) — falling back to sandbox-only "
-            "(--allow-sandbox-only is set)",
+            "%s: worktree creation failed (%s) — continuing without worktree "
+            "(--allow-no-worktree is set)",
             hyp_id, exc,
         )
         worktree = None
 
     try:
         # ── Generate files via Claude Code CLI ─────────────────────
+        # Run Claude Code inside the worktree (if available) so the
+        # live target repo is never modified.
         generated_files = _generate_files_with_claude_code(
             hyp=hyp,
             hyp_id=hyp_id,
             config=config,
             baseline=baseline,
             work_dir=work_dir,
+            worktree_path=worktree.worktree_path if worktree is not None else None,
         )
 
         # Write generated files to work_dir (with path validation)
@@ -2075,7 +2110,7 @@ def _run_single_hypothesis(
         skill_planned=skill_planned,
         error=error,
         measurement_status=measurement_status,
-        execution_mode="sandbox_only" if worktree is None else "repo_grounded",
+        execution_mode="no_worktree" if worktree is None else "repo_grounded",
     )
     return result, worktree
 

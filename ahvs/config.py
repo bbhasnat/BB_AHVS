@@ -28,7 +28,7 @@ class AHVSConfig:
 
     # ── Guards ────────────────────────────────────────────────────────────
     regression_guard_path: Path | None = None
-    allow_sandbox_only: bool = False  # permit sandbox-only fallback on worktree failure
+    allow_no_worktree: bool = False  # continue without worktree if creation fails (non-git targets)
     apply_best: bool = False          # auto-apply best hypothesis patch after cycle
 
     # ── Skill system ──────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ class AHVSConfig:
                 if getattr(args, "prompts", None)
                 else None
             ),
-            allow_sandbox_only=getattr(args, "allow_sandbox_only", False),
+            allow_no_worktree=getattr(args, "allow_no_worktree", False),
             apply_best=getattr(args, "apply_best", False),
             llm_provider=getattr(args, "provider", "anthropic") or "anthropic",
             llm_base_url=getattr(args, "base_url", "") or "",

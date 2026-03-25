@@ -34,7 +34,7 @@ class HypothesisResult:
     kept: bool = False          # set by operator after reviewing cycle_summary
     worktree_path: str = ""     # path to kept worktree (empty if cleaned up)
     patch_path: str = ""        # path to .patch file relative to cycle_dir
-    execution_mode: str = "repo_grounded"  # "repo_grounded" | "sandbox_only"
+    execution_mode: str = "repo_grounded"  # "repo_grounded" | "no_worktree"
 
     @classmethod
     def make_error(
