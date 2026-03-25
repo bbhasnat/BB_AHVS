@@ -1039,6 +1039,63 @@ The skill encodes the exact 5-phase flow so nothing is left to improvisation:
 3. **Per-hypothesis loop** — Executor runs one hypothesis at a time; Observer verifies and fixes any framework bugs before the next hypothesis runs
 4. **Archive** — Team Lead runs Stages 7-8, shuts down the team, and reports summary
 
+#### Running multi-agent with tmux
+
+Use tmux to run each agent in its own pane so you can monitor all three simultaneously:
+
+```bash
+# Create a new tmux session with three panes
+tmux new-session -s ahvs -d
+
+# Split into three panes (top: lead, bottom-left: executor, bottom-right: observer)
+tmux split-window -v -t ahvs
+tmux split-window -h -t ahvs
+
+# Name the panes for clarity
+tmux select-pane -t ahvs:0.0 -T "lead"
+tmux select-pane -t ahvs:0.1 -T "executor"
+tmux select-pane -t ahvs:0.2 -T "observer"
+
+# Attach to the session
+tmux attach -t ahvs
+```
+
+Then in each pane, activate your environment and start the agent:
+
+```bash
+# Pane 0 (lead) — generates hypotheses, coordinates the cycle
+conda activate py11
+claude
+
+# Once inside Claude Code, say:
+# "Run AHVS on /path/to/project with multi-agent supervision. 3 hypotheses."
+```
+
+```bash
+# Pane 1 (executor) — runs hypotheses (spawned by lead via SendMessage)
+conda activate py11
+claude
+```
+
+```bash
+# Pane 2 (observer) — verifies results, fixes framework bugs
+conda activate py11
+claude
+```
+
+The team lead will use `SendMessage` to coordinate the executor and observer. You can watch all three agents work in parallel from the tmux session. Use `Ctrl-b` + arrow keys to switch between panes, or `Ctrl-b z` to zoom into a single pane.
+
+**Quick reference:**
+
+| tmux shortcut | Action |
+|---|---|
+| `Ctrl-b "` | Split pane horizontally |
+| `Ctrl-b %` | Split pane vertically |
+| `Ctrl-b ↑↓←→` | Switch between panes |
+| `Ctrl-b z` | Zoom/unzoom current pane |
+| `Ctrl-b d` | Detach (session keeps running) |
+| `tmux attach -t ahvs` | Re-attach to session |
+
 ### Roadmap / TODOs
 
 AHVS already has a strong generic execution contract: repo + baseline metric + `eval_command` + isolated worktrees. That foundation should stay stable. The next work falls into two buckets: execution scalability and domain expansion.
