@@ -1845,33 +1845,29 @@ def _run_single_hypothesis(
     worktree: HypothesisWorktree | None = None
 
     # ── Create worktree ──────────────────────────────────────────────
+    # AHVS requires a git-backed target repo. Worktree creation failing
+    # means the target is not a git repo or has a corrupted .git — fail
+    # the hypothesis immediately rather than editing the live repo.
     try:
         wt_path = cycle_dir / "worktrees" / hyp_id
         worktree = HypothesisWorktree(config.repo_path, wt_path)
         worktree.create()
     except Exception as exc:  # noqa: BLE001
-        if not config.allow_no_worktree:
-            logger.error(
-                "%s: worktree creation failed (%s) — failing hypothesis "
-                "(use --allow-no-worktree to continue without a worktree)",
-                hyp_id, exc,
-            )
-            return (
-                HypothesisResult.make_error(
-                    hypothesis_id=hyp_id,
-                    hypothesis_type=hyp_type,
-                    primary_metric=metric_name,
-                    baseline_value=baseline_value,
-                    error=f"Worktree creation failed: {exc}",
-                ),
-                None,
-            )
-        logger.warning(
-            "%s: worktree creation failed (%s) — continuing without worktree "
-            "(--allow-no-worktree is set)",
+        logger.error(
+            "%s: worktree creation failed (%s) — failing hypothesis. "
+            "AHVS requires a git-backed target repo.",
             hyp_id, exc,
         )
-        worktree = None
+        return (
+            HypothesisResult.make_error(
+                hypothesis_id=hyp_id,
+                hypothesis_type=hyp_type,
+                primary_metric=metric_name,
+                baseline_value=baseline_value,
+                error=f"Worktree creation failed: {exc}",
+            ),
+            None,
+        )
 
     try:
         # ── Generate files via Claude Code CLI ─────────────────────
@@ -1883,7 +1879,7 @@ def _run_single_hypothesis(
             config=config,
             baseline=baseline,
             work_dir=work_dir,
-            worktree_path=worktree.worktree_path if worktree is not None else None,
+            worktree_path=worktree.worktree_path,
         )
 
         # Write generated files to work_dir (with path validation)
@@ -1973,7 +1969,7 @@ def _run_single_hypothesis(
         # Apply files with splice=True: partial output (only modified
         # functions/classes) is merged into existing files via AST splicing.
         # This avoids the truncation problem from rewriting entire large files.
-        if worktree is not None and valid_files:
+        if valid_files:
             worktree.apply_files(valid_files, splice=True)
 
         # ── Pre-eval import sanity check ──────────────────────────────
@@ -1981,7 +1977,7 @@ def _run_single_hypothesis(
         # If Claude Code broke imports (circular, missing, syntax in spliced
         # file), fail early with a clear message instead of a cryptic eval
         # crash.
-        if worktree is not None and eval_command:
+        if eval_command:
             import_err = _run_import_sanity_check(worktree, eval_command)
             if import_err is not None:
                 logger.error(
@@ -2110,7 +2106,7 @@ def _run_single_hypothesis(
         skill_planned=skill_planned,
         error=error,
         measurement_status=measurement_status,
-        execution_mode="no_worktree" if worktree is None else "repo_grounded",
+        execution_mode="repo_grounded",
     )
     return result, worktree
 

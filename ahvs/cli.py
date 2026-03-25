@@ -27,7 +27,6 @@ def cmd_ahvs(args: argparse.Namespace) -> int:
         question=args.question,
         max_hypotheses=args.max_hypotheses,
         regression_guard_path=_Path(args.regression_guard).resolve() if args.regression_guard else None,
-        allow_no_worktree=getattr(args, "allow_no_worktree", False),
         apply_best=getattr(args, "apply_best", False),
         skill_registry_path=_Path(args.skill_registry).resolve() if args.skill_registry else None,
         prompts_override_path=_Path(args.prompts).resolve() if args.prompts else None,
@@ -336,10 +335,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--acp-timeout", type=int, default=1800, dest="acp_timeout_sec",
         help="ACP per-prompt timeout in seconds (default: 1800). Only used with --provider acp",
-    )
-    parser.add_argument(
-        "--allow-no-worktree", action="store_true",
-        help="Continue without a worktree if git worktree creation fails (non-git targets)",
     )
     parser.add_argument(
         "--apply-best", action="store_true",

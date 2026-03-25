@@ -1,37 +1,35 @@
 # Git Mode Policy
 
-AHVS behaves differently depending on whether the target is a git repo.
+AHVS requires a git-backed target repository. Worktree-based isolation is the only supported execution mode.
 
 ## Git Repo Mode
 
 If the target is inside a git repository:
 
-1. prefer recording the current commit SHA in `.ahvs/baseline_metric.json`
-2. explain that AHVS can use detached worktrees for per-hypothesis execution
-3. describe this as the higher-trust and more reproducible mode
+1. record the current commit SHA in `.ahvs/baseline_metric.json`
+2. explain that AHVS uses detached worktrees for per-hypothesis execution
+3. describe this as the standard execution mode
 
 Suggested explanation:
 
-> This project is in git, so AHVS can evaluate hypotheses in detached worktrees tied to a real commit. That gives stronger reproducibility and cleaner patch tracking.
+> This project is in git, so AHVS will evaluate hypotheses in detached worktrees tied to a real commit. That gives strong reproducibility and clean patch tracking.
 
-## Non-Git Mode
+## Non-Git Target
 
 If the target is not a git repo:
 
-1. do not block by default
-2. explain that AHVS will fall back to sandbox-only execution
-3. explain that this reduces reproducibility, traceability, and patch management confidence
+1. **block onboarding** — AHVS requires git
+2. instruct the user to run `git init` and commit their code first
+3. explain why: AHVS creates per-hypothesis worktrees from committed HEAD
 
 Suggested explanation:
 
-> This target is not in git, so AHVS can still run, but only in sandbox-only mode. That is lower trust than repo-grounded worktrees because there is no commit anchor and patch tracking is weaker.
+> This target is not in git. AHVS requires a git repository because it creates isolated worktrees for each hypothesis. Please run `git init && git add -A && git commit -m "initial"` first.
 
 ## Single File or Loose Directory
 
-Single-file and loose-directory projects are allowed, but they should be described as lower-trust unless the user first places them under version control.
+Single-file and loose-directory projects must be placed under version control before onboarding.
 
 ## Blocking Rule
 
-Missing git should usually be a warning, not a blocker.
-
-Block only if the surrounding workflow specifically requires git-backed reproducibility and the user does not want the reduced-trust mode.
+Missing git is a **hard blocker**. Do not proceed with onboarding until the target is a git repository.

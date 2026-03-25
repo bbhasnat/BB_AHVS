@@ -1603,10 +1603,6 @@ class TestExecutionModeField:
         r = _make_result()
         assert r.execution_mode == "repo_grounded"
 
-    def test_no_worktree(self) -> None:
-        r = _make_result(execution_mode="no_worktree")
-        assert r.execution_mode == "no_worktree"
-
     def test_make_error_default_mode(self) -> None:
         r = HypothesisResult.make_error(
             hypothesis_id="H1",
@@ -1619,17 +1615,7 @@ class TestExecutionModeField:
 
 
 class TestWorktreeFailClosed:
-    """Finding 1: worktree failure should fail hypothesis by default."""
-
-    def test_allow_no_worktree_default_false(self, tmp_path: Path) -> None:
-        config = AHVSConfig(repo_path=tmp_path, question="test")
-        assert config.allow_no_worktree is False
-
-    def test_allow_no_worktree_set_true(self, tmp_path: Path) -> None:
-        config = AHVSConfig(
-            repo_path=tmp_path, question="test", allow_no_worktree=True
-        )
-        assert config.allow_no_worktree is True
+    """Worktree failure should always fail the hypothesis (git repo required)."""
 
     def test_cycle_summary_has_per_hypothesis(self, tmp_path: Path) -> None:
         """cycle_summary.json should include per_hypothesis with execution_mode."""
@@ -1759,10 +1745,9 @@ class TestApplyBestConfig:
 
         args = argparse.Namespace(
             repo=str(tmp_path), question="test?",
-            allow_no_worktree=True, apply_best=True,
+            apply_best=True,
         )
         config = AHVSConfig.from_cli_args(args)
-        assert config.allow_no_worktree is True
         assert config.apply_best is True
 
 

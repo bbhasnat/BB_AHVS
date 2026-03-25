@@ -260,9 +260,9 @@ Always check `git rev-parse --is-inside-work-tree` on the target.
 - This is the recommended mode
 
 **Not a git repo:**
-- Do NOT block by default
-- Warn clearly: AHVS falls back to sandbox-only mode with weaker reproducibility
-- No patch tracking, no commit anchoring
+- Block onboarding — AHVS requires a git repository
+- Instruct user to run `git init && git add -A && git commit -m "initial"` first
+- Explain: AHVS creates per-hypothesis worktrees from committed HEAD
 
 ## Failure Modes
 

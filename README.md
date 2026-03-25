@@ -89,7 +89,7 @@ Each hypothesis gets its own worktree under `<cycle_dir>/worktrees/<ID>/`. This 
 
 After all hypotheses run, AHVS identifies the best improvement and keeps its worktree. All other worktrees are cleaned up. The kept worktree path and all patch paths are recorded in `cycle_summary.json`.
 
-If the target path is not a git repository, worktree creation fails and the hypothesis is marked as an error. Pass `--allow-no-worktree` to permit graceful degradation for non-git targets.
+If the target path is not a git repository, worktree creation fails and the hypothesis is marked as an error. AHVS requires a git-backed target repo — run `git init` on non-git targets before onboarding.
 
 ---
 
@@ -473,7 +473,6 @@ ahvs [options]
 | `--acpx-command` | *(auto-detect)* | Path to acpx binary (only with `--provider acp`) |
 | `--acp-session-name` | `ahvs` | ACP session name (only with `--provider acp`) |
 | `--acp-timeout` | `1800` | ACP per-prompt timeout in seconds (only with `--provider acp`) |
-| `--allow-no-worktree` | off | Allow graceful degradation when git worktree creation fails (non-git targets) |
 | `--apply-best` | off | Auto-apply best improving hypothesis patch and update baseline |
 | `--run-dir` | `<repo>/.ahvs/cycles/<ts>` | Override cycle output directory |
 
@@ -737,7 +736,6 @@ When `eval_command` is configured, it is the **only trusted measurement source**
 | `run_dir` | `Path` | `<repo>/.ahvs/cycles/<ts>` | Cycle output directory |
 | `max_hypotheses` | `int` | `3` | Max hypotheses to generate (hard cap: 5) |
 | `regression_guard_path` | `Path \| None` | `None` | Path to regression guard script |
-| `allow_no_worktree` | `bool` | `False` | Continue without worktree if creation fails (non-git targets) |
 | `apply_best` | `bool` | `False` | Auto-apply best improving hypothesis patch after cycle |
 | `skill_registry_path` | `Path \| None` | `None` | Custom skills YAML |
 | `prompts_override_path` | `Path \| None` | `None` | AHVS prompts override YAML |
