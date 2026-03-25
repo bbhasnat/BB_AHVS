@@ -96,7 +96,7 @@ If the target path is not a git repository, AHVS auto-initializes one at Stage 1
 ## 3. The 8-Stage Cycle
 
 ```
-Stage 1  AHVS_SETUP            Pre-flight checks (baseline, clean repo, LLM connectivity — always runs), cycle dir init
+Stage 1  AHVS_SETUP            Auto-init git if needed, pre-flight checks (baseline, clean repo, LLM), cycle dir init
 Stage 2  AHVS_CONTEXT_LOAD     Load baseline + enriched context + EvolutionStore -> context_bundle.json
 Stage 3  AHVS_HYPOTHESIS_GEN   LLM generates 1-5 typed hypotheses
 Stage 4  AHVS_HUMAN_SELECTION  -- GATE -- operator selects which to run
@@ -1109,7 +1109,7 @@ If either the original or partial file has syntax errors, the merge falls back g
 
 ### Test coverage
 
-211 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, and regression tests for all known framework bugs.
+208 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, and regression tests for all known framework bugs.
 
 Tests work from a fresh checkout — no `pip install -e .` or `PYTHONPATH` required (`conftest.py` bootstraps the import path):
 
