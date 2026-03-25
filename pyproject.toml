@@ -1,0 +1,24 @@
+[project]
+name = "ahvs"
+version = "0.1.0"
+description = "Adaptive Hypothesis Validation System — autonomously improve LLM/RAG systems through cyclic hypothesis testing."
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+]
+readme = "README.md"
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+anthropic = ["httpx>=0.24"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+ahvs = "ahvs.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ahvs"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
