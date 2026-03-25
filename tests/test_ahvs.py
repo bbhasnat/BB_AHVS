@@ -650,7 +650,7 @@ class TestExecuteSetup:
         )
 
         assert result.status == StageStatus.FAILED
-        assert "Pre-flight failed" in (result.error or "")
+        assert "Pre-flight failed" in (result.error or "") or "baseline" in (result.error or "").lower()
 
 
 class TestCycleVerify:

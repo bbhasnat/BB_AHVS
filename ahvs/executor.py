@@ -976,6 +976,62 @@ def _run_regression_guard(guard_path: Path | None, results_path: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _ensure_git_repo(repo_path: Path) -> bool:
+    """Ensure the target directory is a git repository.
+
+    If the target is not git-backed, initializes a new git repo with all
+    existing files committed.  This enables worktree-based isolation for
+    non-git codebases without requiring the user to set up git manually.
+
+    Returns True if git was auto-initialized, False if it was already a repo.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True,
+            cwd=str(repo_path), timeout=10,
+        )
+        if r.returncode == 0 and r.stdout.strip() == "true":
+            return False  # already a git repo
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+
+    # Not a git repo — initialize one
+    logger.info("Target %s is not a git repo — auto-initializing", repo_path)
+    print(f"[AHVS] Target is not a git repo — initializing git for worktree isolation")
+
+    subprocess.run(
+        ["git", "init"], cwd=str(repo_path),
+        capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["git", "add", "-A"], cwd=str(repo_path),
+        capture_output=True, check=True,
+    )
+    # Commit only if there are staged files (empty dirs have nothing to commit)
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True, text=True, cwd=str(repo_path),
+    )
+    if status.stdout.strip():
+        subprocess.run(
+            ["git", "commit", "-m", "ahvs: initial baseline (auto-initialized)"],
+            cwd=str(repo_path),
+            capture_output=True, check=True,
+        )
+    else:
+        # Create an empty initial commit so HEAD exists for worktrees
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "ahvs: empty initial commit"],
+            cwd=str(repo_path),
+            capture_output=True, check=True,
+        )
+
+    logger.info("Auto-initialized git repo at %s", repo_path)
+    print(f"[AHVS] Git initialized with all files committed at HEAD")
+    return True
+
+
 def _execute_setup(
     cycle_dir: Path,
     config: AHVSConfig,
@@ -986,6 +1042,18 @@ def _execute_setup(
     cycle_dir.mkdir(parents=True, exist_ok=True)
     (cycle_dir / "tool_runs").mkdir(exist_ok=True)
     (cycle_dir / "worktrees").mkdir(exist_ok=True)
+
+    # Ensure the target is git-backed (required for worktree isolation).
+    # If not, auto-initialize a git repo so the full pipeline works.
+    try:
+        git_was_initialized = _ensure_git_repo(config.repo_path)
+    except subprocess.CalledProcessError as exc:
+        return AHVSStageResult(
+            stage=AHVSStage.AHVS_SETUP,
+            status=StageStatus.FAILED,
+            artifacts=(),
+            error=f"Failed to initialize git in target directory: {exc.stderr}",
+        )
 
     import os as _os
 
@@ -1018,6 +1086,7 @@ def _execute_setup(
         "repo_path": str(config.repo_path),
         "started_at": _utcnow_iso(),
         "max_hypotheses": config.max_hypotheses,
+        "git_auto_initialized": git_was_initialized,
         "regression_guard": str(config.regression_guard_path) if config.regression_guard_path else None,
         "preflight_checks": [
             {"name": c.name, "status": c.status, "detail": c.detail}
@@ -1854,8 +1923,7 @@ def _run_single_hypothesis(
         worktree.create()
     except Exception as exc:  # noqa: BLE001
         logger.error(
-            "%s: worktree creation failed (%s) — failing hypothesis. "
-            "AHVS requires a git-backed target repo.",
+            "%s: worktree creation failed (%s) — failing hypothesis.",
             hyp_id, exc,
         )
         return (

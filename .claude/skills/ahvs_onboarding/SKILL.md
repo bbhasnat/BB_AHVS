@@ -260,9 +260,9 @@ Always check `git rev-parse --is-inside-work-tree` on the target.
 - This is the recommended mode
 
 **Not a git repo:**
-- Block onboarding — AHVS requires a git repository
-- Instruct user to run `git init && git add -A && git commit -m "initial"` first
-- Explain: AHVS creates per-hypothesis worktrees from committed HEAD
+- Do NOT block — AHVS auto-initializes git at Stage 1 if needed
+- Inform the user that git will be auto-initialized for worktree isolation
+- The `.git` directory persists after the cycle
 
 ## Failure Modes
 

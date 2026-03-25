@@ -89,7 +89,7 @@ Each hypothesis gets its own worktree under `<cycle_dir>/worktrees/<ID>/`. This 
 
 After all hypotheses run, AHVS identifies the best improvement and keeps its worktree. All other worktrees are cleaned up. The kept worktree path and all patch paths are recorded in `cycle_summary.json`.
 
-If the target path is not a git repository, worktree creation fails and the hypothesis is marked as an error. AHVS requires a git-backed target repo — run `git init` on non-git targets before onboarding.
+If the target path is not a git repository, AHVS auto-initializes one at Stage 1 (`git init && git add -A && git commit`). This is logged, recorded in `cycle_manifest.json`, and the `.git` directory persists after the cycle. No manual setup required.
 
 ---
 
