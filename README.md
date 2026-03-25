@@ -1122,11 +1122,10 @@ AHVS already has a strong generic execution contract: repo + baseline metric + `
 
 #### Domain expansion
 
-The `--domain` flag and YAML-based domain packs (`ahvs/domain_packs/`) provide the adapter mechanism. The ML domain pack (`--domain ml`) is shipped. Remaining work:
+The `--domain` flag and YAML-based domain packs (`ahvs/domain_packs/`) provide the adapter mechanism. Two domain packs are available: `llm` (default, LLM/RAG optimization) and `ml` (traditional ML — classifiers, regressors, NLP, CV, time series, etc.). For specialized tool chains (e.g., Hugging Face Trainer, torchvision augmentation), use `--skill-registry` with a project-specific YAML. Remaining work:
 
-1. **Add more domain packs** — e.g., `nlp` (NER, summarization, translation), `cv` (image classification, object detection), `timeseries` (forecasting, anomaly detection)
-2. **Multi-metric optimization** — Preserve the current primary-metric contract, but add first-class support for Pareto-optimal selection across multiple metrics (e.g., precision *and* recall, accuracy *and* latency)
-3. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression) so users can see the full onboarding → cycle → results flow
+1. **Multi-metric optimization** — Preserve the current primary-metric contract, but add first-class support for Pareto-optimal selection across multiple metrics (e.g., precision *and* recall, accuracy *and* latency)
+2. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression) so users can see the full onboarding → cycle → results flow
 
 ### Browser-based hypothesis selector
 
