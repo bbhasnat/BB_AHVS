@@ -1041,60 +1041,37 @@ The skill encodes the exact 5-phase flow so nothing is left to improvisation:
 
 #### Running multi-agent with tmux
 
-Use tmux to run each agent in its own pane so you can monitor all three simultaneously:
+The `ahvs_multiagent` skill handles everything — it spawns the executor and observer as subagents automatically via Claude Code's Agent Teams. You just need one Claude Code session. Use tmux so the session survives terminal disconnects and you can monitor progress:
 
 ```bash
-# Create a new tmux session with three panes
-tmux new-session -s ahvs -d
+# Start a tmux session
+tmux new-session -s ahvs
 
-# Split into three panes (top: lead, bottom-left: executor, bottom-right: observer)
-tmux split-window -v -t ahvs
-tmux split-window -h -t ahvs
-
-# Name the panes for clarity
-tmux select-pane -t ahvs:0.0 -T "lead"
-tmux select-pane -t ahvs:0.1 -T "executor"
-tmux select-pane -t ahvs:0.2 -T "observer"
-
-# Attach to the session
-tmux attach -t ahvs
-```
-
-Then in each pane, activate your environment and start the agent:
-
-```bash
-# Pane 0 (lead) — generates hypotheses, coordinates the cycle
+# Activate your environment and launch Claude Code
 conda activate py11
 claude
 
-# Once inside Claude Code, say:
+# Inside Claude Code, say:
 # "Run AHVS on /path/to/project with multi-agent supervision. 3 hypotheses."
 ```
 
-```bash
-# Pane 1 (executor) — runs hypotheses (spawned by lead via SendMessage)
-conda activate py11
-claude
-```
+The skill will:
+1. Generate hypotheses (Stages 1-3)
+2. Open the browser GUI for selection (or auto-approve)
+3. Spawn executor + observer subagents automatically
+4. Run each hypothesis with verification between them
+5. Archive results and report summary
 
-```bash
-# Pane 2 (observer) — verifies results, fixes framework bugs
-conda activate py11
-claude
-```
+You can detach from the tmux session (`Ctrl-b d`) and re-attach later (`tmux attach -t ahvs`) — the cycle keeps running.
 
-The team lead will use `SendMessage` to coordinate the executor and observer. You can watch all three agents work in parallel from the tmux session. Use `Ctrl-b` + arrow keys to switch between panes, or `Ctrl-b z` to zoom into a single pane.
+**tmux quick reference:**
 
-**Quick reference:**
-
-| tmux shortcut | Action |
+| Shortcut | Action |
 |---|---|
-| `Ctrl-b "` | Split pane horizontally |
-| `Ctrl-b %` | Split pane vertically |
-| `Ctrl-b ↑↓←→` | Switch between panes |
-| `Ctrl-b z` | Zoom/unzoom current pane |
-| `Ctrl-b d` | Detach (session keeps running) |
+| `Ctrl-b d` | Detach (session keeps running in background) |
 | `tmux attach -t ahvs` | Re-attach to session |
+| `Ctrl-b [` | Scroll mode (navigate output history) |
+| `q` | Exit scroll mode |
 
 ### Roadmap / TODOs
 
