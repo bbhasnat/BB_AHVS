@@ -22,13 +22,11 @@ AHVS is a standalone cyclic hypothesis-validation pipeline that autonomously gen
 14. [Advanced Usage](#14-advanced-usage)
     - [Model Selection Strategy](#model-selection-strategy)
     - [Budget Planning for Experiments](#budget-planning-for-experiments)
-    - [Execution Modes](#execution-modes)
     - [Prompt Engineering Tips](#prompt-engineering-tips)
     - [Multi-Agent Execution](#multi-agent-execution-with-claude-code-agent-teams)
     - [Roadmap / TODOs](#roadmap--todos)
     - [Browser-Based Hypothesis Selector](#browser-based-hypothesis-selector)
     - [AST-Based Partial Output Merging](#ast-based-partial-output-merging-splice_functions)
-    - [Framework Bug Fixes](#framework-bug-fixes)
     - [Test Coverage](#test-coverage)
 
 ---
@@ -89,7 +87,7 @@ Each hypothesis gets its own worktree under `<cycle_dir>/worktrees/<ID>/`. This 
 
 After all hypotheses run, AHVS identifies the best improvement and keeps its worktree. All other worktrees are cleaned up. The kept worktree path and all patch paths are recorded in `cycle_summary.json`.
 
-If the target path is not a git repository, worktree creation fails and the hypothesis is marked as an error. Pass `--allow-sandbox-only` to permit graceful degradation for non-git targets (see [Execution modes](#execution-modes)).
+If the target path is not a git repository, worktree creation fails and the hypothesis is marked as an error. Pass `--allow-sandbox-only` to permit graceful degradation for non-git targets.
 
 ---
 
@@ -473,7 +471,7 @@ ahvs [options]
 | `--acpx-command` | *(auto-detect)* | Path to acpx binary (only with `--provider acp`) |
 | `--acp-session-name` | `ahvs` | ACP session name (only with `--provider acp`) |
 | `--acp-timeout` | `1800` | ACP per-prompt timeout in seconds (only with `--provider acp`) |
-| `--allow-sandbox-only` | off | Allow sandbox-only fallback when worktree creation fails |
+| `--allow-sandbox-only` | off | Allow graceful degradation when git worktree creation fails (non-git targets) |
 | `--apply-best` | off | Auto-apply best improving hypothesis patch and update baseline |
 | `--run-dir` | `<repo>/.ahvs/cycles/<ts>` | Override cycle output directory |
 
@@ -569,7 +567,7 @@ Skills are pre-built guidance templates injected into Claude Code's prompt conte
 | `promptfoo_eval` | `prompt_rewrite`, `model_comparison`, `config_change` |
 | `dspy_compile` | `dspy_optimize` |
 | `phoenix_eval` | `prompt_rewrite`, `model_comparison`, `config_change`, `code_change` |
-| `sandbox_run` | `code_change`, `architecture_change`, `multi_llm_judge` |
+| `local_run` | `code_change`, `architecture_change`, `multi_llm_judge` |
 | `regression_guard` | all types |
 | `metric_capture` | all types |
 
@@ -604,7 +602,7 @@ AHVS uses the `EvolutionStore` to persist lessons across cycles. This means:
 
 - **Successful hypotheses** are recorded as positive lessons — future cycles know what worked
 - **Failed attempts** (measured but not improved) are marked as rejected approaches — the LLM is explicitly told not to repeat them
-- **Infrastructure failures** (`extraction_failed`, `sandbox_error`) are recorded as warnings noting the hypothesis was never actually tested — they do *not* count as rejected approaches, so the idea can be retried in future cycles
+- **Infrastructure failures** (`extraction_failed`, `sandbox_error`) are recorded as warnings noting the hypothesis was never actually measured — they do *not* count as rejected approaches, so the idea can be retried in future cycles
 - **Errors** during execution are logged as warnings with enough context to diagnose
 
 The EvolutionStore lives at `<repo>/.ahvs/evolution/`. It is cumulative — never cleared between cycles.
@@ -712,7 +710,7 @@ Each `HypothesisResult` includes a `measurement_status` field that tracks whethe
 |---|---|
 | `"measured"` | Metric was successfully extracted from at least one source |
 | `"extraction_failed"` | Hypothesis ran but no metric could be parsed from any source — treated as a **failed** hypothesis (cannot count as improved) |
-| `"sandbox_error"` | Hypothesis execution raised an exception before metric extraction |
+| `"sandbox_error"` | Hypothesis execution raised an exception before metric extraction (legacy name retained for compatibility) |
 | `"not_executed"` | Hypothesis was not executed (default state) |
 
 **Metric extraction policy** (see [Section 6.2](#62-eval-command) for full details):
@@ -949,16 +947,10 @@ The `cycle_summary.json` includes:
 - `kept_worktree`: path to the git worktree of the best hypothesis (if one improved)
 - `kept_patch`: path to its `.patch` file (relative to cycle_dir)
 - `all_patches`: list of `.patch` paths for every hypothesis (audit trail)
-- `per_hypothesis`: per-hypothesis details including `execution_mode` (`repo_grounded` or `sandbox_only`)
+- `per_hypothesis`: per-hypothesis details including `execution_mode`
 - `all_unmeasured`: `true` if no hypothesis produced a valid measurement (cycle is invalid)
 
 After manual application, update the baseline yourself or let `--apply-best` handle it on the next run.
-
-### Execution modes
-
-By default, AHVS requires repo-grounded execution via git worktrees. If a worktree cannot be created (e.g. non-git target), the hypothesis **fails**. This ensures cycle results are always comparable and reproducible.
-
-To permit graceful degradation for non-git directories, pass `--allow-sandbox-only`. When worktree creation fails with this flag, the hypothesis runs without a worktree — files are generated but eval_command cannot be run in isolation. Results are stamped with `execution_mode: "sandbox_only"` in `results.json` and `per_hypothesis` in `cycle_summary.json`.
 
 ### Model selection strategy
 
@@ -1100,57 +1092,10 @@ When Claude Code produces a partial file (containing only some functions from an
 
 If either the original or partial file has syntax errors, the merge falls back gracefully — returning the partial output (if the original can't be parsed) or the original (if the partial can't be parsed).
 
-### Framework bug fixes
-
-The following framework bugs have been identified and fixed across recent sessions:
-
-| Bug | Description | Fix commit |
-|-----|-------------|-----------|
-| **A** | `apply_files` wrote to worktree root instead of `eval_cwd` subdir | `495c549` |
-| **B** | `--reparse` flag needed for eval-only re-derivation of parsed fields | `5a546d8` (target repo) |
-| **C** | `create()` and `run_eval_command()` silently failed on missing `eval_cwd` | `495c549` |
-| **D** | Executor's `_extract_public_api` was not preserving function signatures | `db53793` |
-| **E** | Naive file overwrite destroyed existing code when Claude Code returned partial output | `db53793` |
-| **F** | Cross-cycle memory stage-name mismatch: wrote `ahvs_execution`, queried `ahvs_hypothesis_gen` | `d362902` |
-| **G** | Enriched onboarding fields (`optimization_goal`, etc.) not forwarded to hypothesis prompt | `d362902` |
-| **H** | Hypothesis parsing relied solely on markdown/regex — fragile with LLM output variation | `d362902` |
-| **I** | Skill context block claimed runtime dispatch; module docstring said advisory-only | `d362902` |
-| **J** | `prompt_rewrite` hypotheses silently unmeasurable when eval uses `--eval-only` | `d362902` |
-| **K** | Worktree `create()` gave unclear error when `--repo` was not inside a git repository | `d362902` |
-| **L** | Framework accepted Claude Code self-reported metrics (false 0.9928) when eval crashed | v8 fix |
-| **M** | Stale worktree from first run blocked reruns | v8 fix |
-| **N** | Claude Code consistently destroys eval harness files (run_eval.py, __init__.py, main.py) | v8 fix |
-| **O** | `save_results` overwrote `results.json` on each CLI invocation — multi-agent per-hypothesis runs lost prior results | `avhs_man_llm_v2` |
-| **P** | Root-level `.py` files from Claude Code blocked instead of auto-remapped to `src/` counterpart | `14d360f` |
-
-All bugs have regression tests in `tests/test_ahvs.py`.
-
 ### Test coverage
 
-AHVS has comprehensive unit/integration tests in `tests/test_ahvs.py` covering:
+211 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, and regression tests for all known framework bugs.
 
-1. Stage enum ordering and contracts
-2. Config validation and edge cases
-3. Health check pass/fail scenarios
-4. Skill library matching and custom registries
-5. Hypothesis worktree creation, file application, and cleanup
-6. Eval command execution in worktrees
-7. HypothesisResult serialization round-trips
-8. Bug A regression: `eval_cwd` subdir write base
-9. Bug C regression: `eval_cwd` existence checks
-10. Bug E regression: AST-based `splice_functions`
-11. Bug F regression: cross-cycle memory stage-name match
-12. Bug G: enriched onboarding context forwarding
-13. Bug H: structured JSON parsing with markdown fallback
-14. Bug I: skill semantics consistency
-15. Bug J: eval-mode intelligence warnings
-16. Bug K: worktree subdir hardening and full round-trip
-17. Bug L: forbidden file filter + hardened metric extraction
-18. Bug N: pre-eval import sanity check
-19. Bug O: `save_results` merge-by-ID accumulation
-20. Bug P: root-level file auto-remap to `src/` counterpart
-
-Run them with:
 ```bash
 python -m pytest tests/test_ahvs.py -v
 ```
