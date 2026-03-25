@@ -474,7 +474,28 @@ class HypothesisWorktree:
     def run_eval_command(
         self, cmd: str, timeout: int = 300
     ) -> EvalResult:
-        """Run *cmd* (shell) inside the worktree and return the result."""
+        """Run *cmd* (shell) inside the worktree and return the result.
+
+        If *cmd* starts with ``cd /absolute/path && ...`` or
+        ``cd /absolute/path ; ...``, the ``cd`` prefix is stripped because
+        ``eval_cwd`` already points to the correct directory inside the
+        worktree.  An absolute ``cd`` would escape the worktree and run
+        against the live repo — defeating isolation entirely.
+        """
+        import re
+
+        # Strip leading 'cd /absolute-path && ' or 'cd /absolute-path ; '
+        # to prevent the shell from escaping the worktree.  eval_cwd already
+        # handles the correct directory context.
+        m = re.match(r'^cd\s+(/\S+)\s*(&&|;)\s*', cmd)
+        if m:
+            logger.info(
+                "run_eval_command: stripped 'cd %s' from command to prevent "
+                "worktree escape — running from eval_cwd=%s instead",
+                m.group(1), self.eval_cwd,
+            )
+            cmd = cmd[m.end():]
+
         if not self.eval_cwd.exists():
             msg = (
                 f"eval_cwd does not exist: {self.eval_cwd}. "
