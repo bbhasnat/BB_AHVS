@@ -1596,6 +1596,17 @@ def _write_eager_lesson(
         now = _utcnow_iso()
         metric_name = result.primary_metric
 
+        # Common structured fields for all branches
+        _structured = dict(
+            hypothesis_id=result.hypothesis_id,
+            hypothesis_type=result.hypothesis_type,
+            metric_name=metric_name,
+            metric_baseline=result.baseline_value,
+            metric_after=result.metric_value,
+            metric_delta=result.delta,
+            eval_method=result.eval_method,
+        )
+
         if result.improved:
             lesson = LessonEntry(
                 stage_name="ahvs_execution",
@@ -1610,6 +1621,7 @@ def _write_eager_lesson(
                 timestamp=now,
                 run_id=cycle_id,
                 cycle_status="partial",
+                **_structured,
             )
         elif result.error:
             lesson = LessonEntry(
@@ -1624,6 +1636,7 @@ def _write_eager_lesson(
                 timestamp=now,
                 run_id=cycle_id,
                 cycle_status="partial",
+                **_structured,
             )
         elif result.measurement_status != "measured":
             lesson = LessonEntry(
@@ -1639,6 +1652,7 @@ def _write_eager_lesson(
                 timestamp=now,
                 run_id=cycle_id,
                 cycle_status="partial",
+                **_structured,
             )
         else:
             lesson = LessonEntry(
@@ -1653,6 +1667,7 @@ def _write_eager_lesson(
                 timestamp=now,
                 run_id=cycle_id,
                 cycle_status="partial",
+                **_structured,
             )
 
         store.append(lesson)
@@ -2376,6 +2391,15 @@ def _execute_report_and_memory(
         lessons: list[LessonEntry] = []
 
         for r in results:
+            _structured = dict(
+                hypothesis_id=r.hypothesis_id,
+                hypothesis_type=r.hypothesis_type,
+                metric_name=metric_name,
+                metric_baseline=r.baseline_value,
+                metric_after=r.metric_value,
+                metric_delta=r.delta,
+                eval_method=r.eval_method,
+            )
             if r.improved:
                 lessons.append(LessonEntry(
                     stage_name="ahvs_execution",
@@ -2389,6 +2413,7 @@ def _execute_report_and_memory(
                     ),
                     timestamp=now,
                     run_id=cycle_id,
+                    **_structured,
                 ))
             elif r.error:
                 lessons.append(LessonEntry(
@@ -2401,6 +2426,7 @@ def _execute_report_and_memory(
                     ),
                     timestamp=now,
                     run_id=cycle_id,
+                    **_structured,
                 ))
             elif r.measurement_status != "measured":
                 # Infrastructure failure (extraction_failed, sandbox_error, etc.)
@@ -2419,6 +2445,7 @@ def _execute_report_and_memory(
                     ),
                     timestamp=now,
                     run_id=cycle_id,
+                    **_structured,
                 ))
             else:
                 lessons.append(LessonEntry(
@@ -2432,6 +2459,7 @@ def _execute_report_and_memory(
                     ),
                     timestamp=now,
                     run_id=cycle_id,
+                    **_structured,
                 ))
 
         if lessons:
