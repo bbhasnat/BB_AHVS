@@ -1,6 +1,6 @@
 # AHVS — Adaptive Hypothesis Validation System
 
-AHVS is a standalone cyclic hypothesis-validation pipeline that autonomously generates, selects, executes, and evaluates improvement hypotheses for target LLM and RAG systems. It archives what it learned for the next cycle, steering future experiments away from dead ends and toward approaches that have worked before. The roadmap is to extend the same loop to ML classifier repos and broader algorithmic/code-change workloads via a cleaner domain-adapter layer.
+AHVS is a standalone cyclic hypothesis-validation pipeline that autonomously generates, selects, executes, and evaluates improvement hypotheses for target AI/ML systems. Point it at a repo with a measurable metric, ask a question like *"How can we improve test_accuracy by 5%?"*, and it tests each hypothesis in an isolated git worktree, measures the result, and archives what it learned. Lessons from past cycles steer future experiments away from dead ends and toward approaches that have worked before — so the system gets smarter with every run.
 
 ---
 
