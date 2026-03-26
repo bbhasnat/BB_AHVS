@@ -2461,8 +2461,9 @@ def _run_single_hypothesis(
             and eval_command
             and worktree is not None
         ):
-            logger.info("%s: running eval_command in worktree: %s", hyp_id, eval_command)
-            eval_result = worktree.run_eval_command(eval_command)
+            eval_timeout = int(baseline.get("eval_timeout", config.eval_timeout_sec))
+            logger.info("%s: running eval_command in worktree (timeout=%ds): %s", hyp_id, eval_timeout, eval_command)
+            eval_result = worktree.run_eval_command(eval_command, timeout=eval_timeout)
             if eval_result.returncode == 0:
                 extracted = _extract_metric_from_output(eval_result.stdout, metric_name)
                 if extracted is not None:

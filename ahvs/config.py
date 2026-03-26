@@ -52,6 +52,9 @@ class AHVSConfig:
     enable_cross_project: bool = True
     global_evolution_dir: Path = field(default=None)  # type: ignore[assignment]
 
+    # ── Eval settings ─────────────────────────────────────────────────
+    eval_timeout_sec: int = 600  # eval_command timeout; baseline_metric.json "eval_timeout" overrides
+
     # ── ACP settings (only used when llm_provider == "acp") ───────────
     acp_agent: str = "claude"
     acp_cwd: str = "."           # resolved to repo_path in __post_init__
@@ -122,4 +125,5 @@ class AHVSConfig:
             acpx_command=getattr(args, "acpx_command", "") or "",
             acp_session_name=getattr(args, "acp_session_name", "ahvs") or "ahvs",
             acp_timeout_sec=getattr(args, "acp_timeout_sec", 1800) or 1800,
+            eval_timeout_sec=getattr(args, "eval_timeout_sec", 600) or 600,
         )

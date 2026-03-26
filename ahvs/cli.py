@@ -50,6 +50,7 @@ def cmd_ahvs(args: argparse.Namespace) -> int:
         acpx_command=getattr(args, "acpx_command", "") or "",
         acp_session_name=getattr(args, "acp_session_name", "ahvs") or "ahvs",
         acp_timeout_sec=getattr(args, "acp_timeout_sec", 1800) or 1800,
+        eval_timeout_sec=getattr(args, "eval_timeout_sec", 600) or 600,
     )
 
     from_stage: AHVSStage | None = None
@@ -361,6 +362,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--acp-timeout", type=int, default=1800, dest="acp_timeout_sec",
         help="ACP per-prompt timeout in seconds (default: 1800). Only used with --provider acp",
+    )
+    parser.add_argument(
+        "--eval-timeout", type=int, default=600, dest="eval_timeout_sec",
+        help="Timeout in seconds for eval_command execution (default: 600). Also settable via 'eval_timeout' in baseline_metric.json",
     )
     parser.add_argument(
         "--apply-best", action="store_true",
