@@ -1116,6 +1116,7 @@ def _execute_context_load(
             question=config.question,
             evolution_dir=config.evolution_dir,
             baseline_path=config.baseline_path,
+            max_lesson_cycles=config.max_lesson_cycles,
         )
     except (FileNotFoundError, ValueError) as exc:
         return AHVSStageResult(
@@ -1577,6 +1578,89 @@ def _execute_validation_plan(
     )
 
 
+def _write_eager_lesson(
+    result: HypothesisResult,
+    config: AHVSConfig,
+    cycle_id: str,
+) -> None:
+    """Write a lesson for a single hypothesis result immediately after measurement.
+
+    This ensures lessons survive even if the cycle crashes before Stage 7.
+    Stage 7 skips re-writing lessons that already exist (dedup by run_id +
+    description prefix happens at query time via compact()).
+    """
+    from ahvs.evolution import EvolutionStore, LessonEntry, LessonCategory
+
+    try:
+        store = EvolutionStore(config.evolution_dir)
+        now = _utcnow_iso()
+        metric_name = result.primary_metric
+
+        if result.improved:
+            lesson = LessonEntry(
+                stage_name="ahvs_execution",
+                stage_num=6,
+                category=LessonCategory.EXPERIMENT,
+                severity="info",
+                description=(
+                    f"[{cycle_id}] {result.hypothesis_id} ({result.hypothesis_type}) improved "
+                    f"{metric_name} by {result.delta:+.4f} ({result.delta_pct:+.1f}%). "
+                    f"Eval: {result.eval_method}."
+                ),
+                timestamp=now,
+                run_id=cycle_id,
+                cycle_status="partial",
+            )
+        elif result.error:
+            lesson = LessonEntry(
+                stage_name="ahvs_execution",
+                stage_num=6,
+                category=LessonCategory.EXPERIMENT,
+                severity="warning",
+                description=(
+                    f"[{cycle_id}] {result.hypothesis_id} ({result.hypothesis_type}) "
+                    f"FAILED: {result.error[:150]}"
+                ),
+                timestamp=now,
+                run_id=cycle_id,
+                cycle_status="partial",
+            )
+        elif result.measurement_status != "measured":
+            lesson = LessonEntry(
+                stage_name="ahvs_execution",
+                stage_num=6,
+                category=LessonCategory.EXPERIMENT,
+                severity="warning",
+                description=(
+                    f"[{cycle_id}] {result.hypothesis_id} ({result.hypothesis_type}) "
+                    f"measurement failed ({result.measurement_status}). "
+                    f"Infrastructure issue — hypothesis was not tested."
+                ),
+                timestamp=now,
+                run_id=cycle_id,
+                cycle_status="partial",
+            )
+        else:
+            lesson = LessonEntry(
+                stage_name="ahvs_execution",
+                stage_num=6,
+                category=LessonCategory.EXPERIMENT,
+                severity="info",
+                description=(
+                    f"[{cycle_id}] {result.hypothesis_id} ({result.hypothesis_type}) did not improve "
+                    f"{metric_name} (Δ{result.delta:+.4f}). Rejected approach."
+                ),
+                timestamp=now,
+                run_id=cycle_id,
+                cycle_status="partial",
+            )
+
+        store.append(lesson)
+        logger.info("Eager lesson written for %s", result.hypothesis_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Eager lesson write failed (non-fatal): %s", exc)
+
+
 def _execute_hypotheses(
     cycle_dir: Path,
     config: AHVSConfig,
@@ -1638,6 +1722,10 @@ def _execute_hypotheses(
             available_tools=available_tools,
         )
         results_and_worktrees.append((result, worktree))
+
+        # Eager lesson write — survives even if cycle crashes before Stage 7
+        _write_eager_lesson(result, config, cycle_dir.name)
+
         measurement_tag = ""
         if result.measurement_status == "extraction_failed":
             measurement_tag = " [MEASUREMENT FAILED]"

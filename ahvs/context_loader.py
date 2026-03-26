@@ -133,6 +133,7 @@ def load_context_bundle(
     question: str,
     evolution_dir: Path,
     baseline_path: Path,
+    max_lesson_cycles: int = 5,
 ) -> dict:
     """Build the context_bundle.json payload.
 
@@ -140,6 +141,10 @@ def load_context_bundle(
     - baseline metric (from .ahvs/baseline_metric.json)
     - cross-cycle memory (from EvolutionStore)
     - domain tags (inferred from repo dependencies)
+
+    Args:
+        max_lesson_cycles: Only include lessons from the last K complete
+            cycles.  0 = unlimited (time-decay still applies).
     """
     baseline = load_baseline_metric(baseline_path)
 
@@ -153,7 +158,11 @@ def load_context_bundle(
             # writing lessons at Stage 7 (report/memory).  Using the same name
             # ensures the EvolutionStore 2x boost applies to direct matches,
             # giving cross-cycle lessons proper retrieval priority.
-            lessons = store.query_for_stage("ahvs_execution", max_lessons=12)
+            lessons = store.query_for_stage(
+                "ahvs_execution",
+                max_lessons=12,
+                max_cycles=max_lesson_cycles,
+            )
         except Exception:  # noqa: BLE001
             pass  # Non-fatal — first cycle has no history
 

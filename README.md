@@ -457,6 +457,7 @@ ahvs [options]
 | `--repo`, `-r` | *(required)* | Path to target repository |
 | `--question`, `-q` | *(required)* | The cycle question (what to improve) |
 | `--max-hypotheses` | `3` | How many hypotheses to generate (max 5) |
+| `--max-lesson-cycles` | `5` | Load lessons from last K complete cycles only (0 = unlimited) |
 | `--auto-approve` | off | Skip interactive gate; run all hypotheses |
 | `--selection` | none | Pre-specify hypotheses to run (e.g. `H1,H3`). For conversational/agent-driven mode. |
 | `--from-stage` | *(stage 1)* | Resume from a specific stage name |
@@ -637,9 +638,26 @@ AHVS uses the `EvolutionStore` to persist lessons across cycles. This means:
 - **Infrastructure failures** (`extraction_failed`, `sandbox_error`) are recorded as warnings noting the hypothesis was never actually measured — they do *not* count as rejected approaches, so the idea can be retried in future cycles
 - **Errors** during execution are logged as warnings with enough context to diagnose
 
-The EvolutionStore lives at `<repo>/.ahvs/evolution/`. It is cumulative — never cleared between cycles.
+The EvolutionStore lives at `<repo>/.ahvs/evolution/`. It is managed automatically — stale entries are compacted and failed cycle directories are cleaned up at the start of each new cycle.
 
-At Stage 2 (`AHVS_CONTEXT_LOAD`), AHVS queries the last 12 lessons from the store using the stage name `"ahvs_execution"` — the same name used when writing lessons at Stage 7. This ensures the EvolutionStore's 2x relevance boost applies correctly to AHVS-specific lessons. Lessons with severity `"info"` are treated as positive outcomes; those with `"warning"` or `"error"` are surfaced as rejected approaches. The LLM sees both what has worked and what has been ruled out, producing increasingly targeted hypotheses over time.
+### Memory management
+
+Each lesson carries a `cycle_status` field (`"complete"`, `"partial"`, or `"failed"`). When querying lessons for hypothesis generation, AHVS **filters out failed cycles** — only lessons with status `"complete"` or `"partial"` (eager writes) are included. This prevents noise from infrastructure crashes (which never tested any hypothesis) from polluting future hypothesis generation, while preserving results from partial runs where hypotheses were actually measured.
+
+The `--max-lesson-cycles K` flag (default: 5) caps how many recent complete cycles feed into hypothesis generation. With K=5 and 3 hypotheses per cycle, the LLM sees at most ~15 recent lessons instead of an unbounded history. Set to 0 for unlimited (time-decay still applies).
+
+**Eager lesson writes** — Each hypothesis result is written to `lessons.jsonl` immediately after measurement (Stage 6), with `cycle_status="partial"`. This ensures lessons survive even if the cycle crashes before Stage 7. When Stage 7 runs successfully, it writes the same lessons with `cycle_status="complete"`. The next compaction pass deduplicates and upgrades partial entries to complete.
+
+**Automatic cleanup** runs at the start of every new cycle:
+
+1. **Cycle directory cleanup** — Removes four categories of stale dirs:
+   - Stage-1 failures (setup crashes, no artifacts)
+   - Orphan dirs (no checkpoint file — manual test dirs, etc.)
+   - Partial cycles (reached execution but never completed Stage 8 — hypothesis results are already in `lessons.jsonl` via eager writes)
+   - Old complete cycles beyond the retention window (keeps the 3 most recent complete cycles for auditing)
+2. **Lesson compaction** — Expired entries (>90 days old, past the time-decay cutoff) and duplicates are removed from `lessons.jsonl`. When both a partial and complete entry exist for the same lesson, the complete entry is kept.
+
+At Stage 2 (`AHVS_CONTEXT_LOAD`), AHVS queries the top 12 lessons from the store using the stage name `"ahvs_execution"` — the same name used when writing lessons at Stage 7. This ensures the EvolutionStore's 2x relevance boost applies correctly to AHVS-specific lessons. Lessons with severity `"info"` are treated as positive outcomes; those with `"warning"` or `"error"` are surfaced as rejected approaches. The LLM sees both what has worked and what has been ruled out, producing increasingly targeted hypotheses over time.
 
 ### Enriched onboarding context
 
@@ -868,7 +886,7 @@ ahvs/
 │   ├── session_20260319.md     # Session summaries: what ran, what broke, what was learned
 │   ├── bug_report_example.md   # Bug reports with root cause and fix details
 │   └── ...
-└── cycles/
+└── cycles/                         # Auto-cleaned: keeps last 3 complete cycles
     └── 20260318_120000/         # One directory per cycle run
         ├── ahvs_checkpoint.json      # Stage resumption checkpoint
         ├── cycle_manifest.json       # Cycle metadata + preflight results
@@ -1128,6 +1146,15 @@ The `--domain` flag and YAML-based domain packs (`ahvs/domain_packs/`) provide t
 2. **Data analytics domain (exploratory)** — Investigate whether AHVS can drive data-focused hypothesis cycles: dataset selection, feature subset optimization, preprocessing pipeline tuning, data augmentation experiments. These fit the current loop well when there's a clear downstream metric (e.g., "which cleaning pipeline gives the best F1?"). Open-ended exploration (EDA, pattern discovery) would need a different output contract since AHVS currently requires a single numeric metric. A `data_prompts.yaml` pack would be the first step; structural changes only if prompt-level framing proves insufficient.
 3. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression, data preprocessing) so users can see the full onboarding → cycle → results flow
 
+#### Memory management
+
+1. **Browser GUI for manual lesson/memory cleanup**
+   Add an interactive browser-based GUI (similar to hypothesis selector) that lets the operator inspect, filter, and selectively delete individual lessons from `lessons.jsonl` and memory files from `.ahvs/memory/`. Useful for curating cross-cycle memory when automatic compaction is insufficient.
+2. **LLM-based lesson summarization**
+   Periodically consolidate clusters of related lessons into summary entries (e.g., "5 threshold-tweak hypotheses tried across cycles X-Y, max +0.8% improvement") instead of keeping every raw entry. Reduces prompt token usage while preserving signal.
+
+Near-term recommendation: treat AHVS as LLM/RAG-first in its built-in defaults, while evolving the adapter layer so repeated use on classifiers and other algorithmic repos becomes a clean extension rather than a prompt-level workaround.
+
 ### Browser-based hypothesis selector
 
 The `hypothesis_selector.py` module provides a standalone web GUI for hypothesis selection (no pip dependencies — pure stdlib):
@@ -1166,7 +1193,7 @@ If either the original or partial file has syntax errors, the merge falls back g
 
 ### Test coverage
 
-208 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, and regression tests for all known framework bugs.
+229 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, memory management (cycle cleanup, lesson compaction, eager writes, cycle-status filtering), and regression tests for all known framework bugs.
 
 Tests work from a fresh checkout — no `pip install -e .` or `PYTHONPATH` required (`conftest.py` bootstraps the import path):
 
