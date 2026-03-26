@@ -270,6 +270,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Maximum hypotheses to generate per cycle (default: 3, hard cap: 5)",
     )
     parser.add_argument(
+        "--max-lesson-cycles", type=int, default=5,
+        help="Load lessons from last K complete cycles only (default: 5, 0 = unlimited)",
+    )
+    parser.add_argument(
         "--regression-guard",
         help="Path to regression guard shell script (optional)",
     )

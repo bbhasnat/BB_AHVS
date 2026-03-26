@@ -3174,3 +3174,391 @@ class TestImportCheckQuotedEnvVars:
         )
         assert result is None  # should pass, not fail with shell error
         wt.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# 17. Memory management — cycle_status, compaction, auto-cleanup
+# ---------------------------------------------------------------------------
+
+
+class TestLessonCycleStatus:
+    """LessonEntry.cycle_status field for filtering lessons by cycle outcome."""
+
+    def test_cycle_status_defaults_to_complete(self) -> None:
+        from ahvs.evolution import LessonEntry
+
+        entry = LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="test", timestamp="2026-03-26T00:00:00Z",
+        )
+        assert entry.cycle_status == "complete"
+
+    def test_cycle_status_round_trip(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        store = EvolutionStore(tmp_path / "evo")
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="good", timestamp="2026-03-26T00:00:00Z",
+            run_id="cycle_a", cycle_status="complete",
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="bad", timestamp="2026-03-26T00:00:00Z",
+            run_id="cycle_b", cycle_status="failed",
+        ))
+
+        all_lessons = store.load_all()
+        assert len(all_lessons) == 2
+        assert all_lessons[0].cycle_status == "complete"
+        assert all_lessons[1].cycle_status == "failed"
+
+    def test_query_filters_out_failed_cycles(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        from datetime import datetime, timezone
+
+        store = EvolutionStore(tmp_path / "evo")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="from complete cycle",
+            timestamp=now, run_id="cycle_ok", cycle_status="complete",
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="from failed cycle",
+            timestamp=now, run_id="cycle_bad", cycle_status="failed",
+        ))
+
+        results = store.query_for_stage("ahvs_execution", max_lessons=10)
+        assert len(results) == 1
+        assert "complete cycle" in results[0].description
+
+    def test_query_max_cycles_caps_to_k_recent(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        from datetime import datetime, timezone
+
+        store = EvolutionStore(tmp_path / "evo")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        # 3 cycles, each with one lesson
+        for i, cid in enumerate(["20260301_000000", "20260302_000000", "20260303_000000"]):
+            store.append(LessonEntry(
+                stage_name="ahvs_execution", stage_num=6, category="experiment",
+                severity="info", description=f"lesson from {cid}",
+                timestamp=now, run_id=cid, cycle_status="complete",
+            ))
+
+        # max_cycles=2 → only the 2 most recent cycles
+        results = store.query_for_stage(
+            "ahvs_execution", max_lessons=10, max_cycles=2
+        )
+        run_ids = {r.run_id for r in results}
+        assert "20260303_000000" in run_ids
+        assert "20260302_000000" in run_ids
+        assert "20260301_000000" not in run_ids
+
+    def test_query_max_cycles_zero_means_unlimited(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        from datetime import datetime, timezone
+
+        store = EvolutionStore(tmp_path / "evo")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        for cid in ["20260301_000000", "20260302_000000", "20260303_000000"]:
+            store.append(LessonEntry(
+                stage_name="ahvs_execution", stage_num=6, category="experiment",
+                severity="info", description=f"lesson from {cid}",
+                timestamp=now, run_id=cid, cycle_status="complete",
+            ))
+
+        results = store.query_for_stage(
+            "ahvs_execution", max_lessons=10, max_cycles=0
+        )
+        assert len(results) == 3
+
+
+class TestEvolutionStoreCompact:
+    """EvolutionStore.compact() removes expired and duplicate entries."""
+
+    def test_compact_removes_duplicates(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        from datetime import datetime, timezone
+
+        store = EvolutionStore(tmp_path / "evo")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        # Write the same lesson twice (same run_id + description)
+        for _ in range(2):
+            store.append(LessonEntry(
+                stage_name="ahvs_execution", stage_num=6, category="experiment",
+                severity="info", description="H1 improved precision by +5%",
+                timestamp=now, run_id="cycle_a",
+            ))
+
+        assert store.count() == 2
+        removed = store.compact()
+        assert removed == 1
+        assert store.count() == 1
+
+    def test_compact_empty_store(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore
+
+        store = EvolutionStore(tmp_path / "evo")
+        assert store.compact() == 0
+
+    def test_compact_preserves_distinct_lessons(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        from datetime import datetime, timezone
+
+        store = EvolutionStore(tmp_path / "evo")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 improved", timestamp=now, run_id="a",
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H2 improved", timestamp=now, run_id="a",
+        ))
+
+        removed = store.compact()
+        assert removed == 0
+        assert store.count() == 2
+
+
+class TestCleanupCycles:
+    """EvolutionStore.cleanup_cycles() removes stale cycle dirs."""
+
+    def _make_cycle(self, cycles: Path, name: str, stage_num: int, status: str) -> Path:
+        d = cycles / name
+        d.mkdir()
+        (d / "ahvs_checkpoint.json").write_text(json.dumps({
+            "stage_num": stage_num, "status": status,
+        }))
+        return d
+
+    def test_removes_setup_failed_cycle(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore
+
+        cycles = tmp_path / "cycles"
+        cycles.mkdir()
+        bad = self._make_cycle(cycles, "20260325_222024", 1, "failed")
+
+        removed = EvolutionStore.cleanup_cycles(cycles)
+        assert "20260325_222024" in removed
+        assert not bad.exists()
+
+    def test_removes_orphan_dirs(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore
+
+        cycles = tmp_path / "cycles"
+        cycles.mkdir()
+        orphan = cycles / "test_wt"
+        orphan.mkdir()
+        # No checkpoint file
+
+        removed = EvolutionStore.cleanup_cycles(cycles)
+        assert "test_wt" in removed
+        assert not orphan.exists()
+
+    def test_removes_partial_cycles(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore
+
+        cycles = tmp_path / "cycles"
+        cycles.mkdir()
+        partial = self._make_cycle(cycles, "20260325_222114", 6, "done")
+
+        removed = EvolutionStore.cleanup_cycles(cycles)
+        assert "20260325_222114" in removed
+        assert not partial.exists()
+
+    def test_keeps_recent_complete_cycles(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore
+
+        cycles = tmp_path / "cycles"
+        cycles.mkdir()
+        c1 = self._make_cycle(cycles, "20260301_000000", 8, "done")
+        c2 = self._make_cycle(cycles, "20260302_000000", 8, "done")
+        c3 = self._make_cycle(cycles, "20260303_000000", 8, "done")
+
+        removed = EvolutionStore.cleanup_cycles(cycles, keep_complete=3)
+        assert removed == []
+        assert c1.exists() and c2.exists() and c3.exists()
+
+    def test_trims_old_complete_cycles_beyond_retention(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore
+
+        cycles = tmp_path / "cycles"
+        cycles.mkdir()
+        old = self._make_cycle(cycles, "20260301_000000", 8, "done")
+        mid = self._make_cycle(cycles, "20260302_000000", 8, "done")
+        new1 = self._make_cycle(cycles, "20260303_000000", 8, "done")
+        new2 = self._make_cycle(cycles, "20260304_000000", 8, "done")
+
+        removed = EvolutionStore.cleanup_cycles(cycles, keep_complete=2)
+        assert "20260301_000000" in removed
+        assert "20260302_000000" in removed
+        assert not old.exists()
+        assert not mid.exists()
+        assert new1.exists() and new2.exists()
+
+    def test_keep_complete_zero_preserves_all(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore
+
+        cycles = tmp_path / "cycles"
+        cycles.mkdir()
+        for i in range(5):
+            self._make_cycle(cycles, f"2026030{i}_000000", 8, "done")
+
+        removed = EvolutionStore.cleanup_cycles(cycles, keep_complete=0)
+        assert removed == []
+
+    def test_mixed_scenario(self, tmp_path: Path) -> None:
+        """Mirrors the real autoqa state: 2 failed, 2 partial, 1 complete, 1 orphan."""
+        from ahvs.evolution import EvolutionStore
+
+        cycles = tmp_path / "cycles"
+        cycles.mkdir()
+        self._make_cycle(cycles, "20260325_222024", 1, "failed")
+        self._make_cycle(cycles, "20260325_222051", 1, "failed")
+        self._make_cycle(cycles, "20260325_222114", 6, "done")
+        self._make_cycle(cycles, "20260325_232228", 6, "done")
+        self._make_cycle(cycles, "20260325_232853", 8, "done")
+        orphan = cycles / "test_wt"
+        orphan.mkdir()
+
+        removed = EvolutionStore.cleanup_cycles(cycles, keep_complete=3)
+        # Should remove: 2 failed + 2 partial + 1 orphan = 5
+        assert len(removed) == 5
+        # Only the complete cycle survives
+        assert (cycles / "20260325_232853").exists()
+
+    def test_handles_nonexistent_dir(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore
+
+        removed = EvolutionStore.cleanup_cycles(tmp_path / "nope")
+        assert removed == []
+
+
+class TestEagerLessonWrites:
+    """Eager (partial) lessons are included in queries and upgraded by compaction."""
+
+    def test_partial_lessons_included_in_query(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        from datetime import datetime, timezone
+
+        store = EvolutionStore(tmp_path / "evo")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 did not improve precision. Rejected approach.",
+            timestamp=now, run_id="cycle_x", cycle_status="partial",
+        ))
+
+        results = store.query_for_stage("ahvs_execution", max_lessons=10)
+        assert len(results) == 1
+        assert results[0].cycle_status == "partial"
+
+    def test_compact_upgrades_partial_to_complete(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        from datetime import datetime, timezone
+
+        store = EvolutionStore(tmp_path / "evo")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        # Eager write (partial)
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 improved precision by +0.01",
+            timestamp=now, run_id="cycle_a", cycle_status="partial",
+        ))
+        # Stage 7 archive (complete) — same run_id + description
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 improved precision by +0.01",
+            timestamp=now, run_id="cycle_a", cycle_status="complete",
+        ))
+
+        assert store.count() == 2
+        removed = store.compact()
+        assert removed == 1
+        assert store.count() == 1
+
+        # The surviving entry should be "complete"
+        remaining = store.load_all()
+        assert remaining[0].cycle_status == "complete"
+
+    def test_failed_status_still_filtered_out(self, tmp_path: Path) -> None:
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        from datetime import datetime, timezone
+
+        store = EvolutionStore(tmp_path / "evo")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="from failed infra",
+            timestamp=now, run_id="bad", cycle_status="failed",
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="from partial run",
+            timestamp=now, run_id="ok", cycle_status="partial",
+        ))
+
+        results = store.query_for_stage("ahvs_execution", max_lessons=10)
+        assert len(results) == 1
+        assert "partial run" in results[0].description
+
+
+class TestMaxLessonCyclesConfig:
+    """max_lesson_cycles wired through config → context_loader."""
+
+    def test_config_default_is_5(self) -> None:
+        from ahvs.config import AHVSConfig
+
+        config = AHVSConfig(
+            repo_path=Path("/tmp/fake"),
+            question="test",
+        )
+        assert config.max_lesson_cycles == 5
+
+    def test_context_loader_respects_max_lesson_cycles(self, tmp_path: Path) -> None:
+        from ahvs.context_loader import load_context_bundle
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        from datetime import datetime, timezone
+
+        evo_dir = tmp_path / "evolution"
+        store = EvolutionStore(evo_dir)
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        # Write lessons from 3 different cycles
+        for cid in ["20260301_000000", "20260302_000000", "20260303_000000"]:
+            store.append(LessonEntry(
+                stage_name="ahvs_execution", stage_num=6, category="experiment",
+                severity="info", description=f"Lesson from {cid}",
+                timestamp=now, run_id=cid, cycle_status="complete",
+            ))
+
+        baseline = {
+            "primary_metric": "precision", "precision": 0.85,
+            "recorded_at": "2026-03-24T10:00:00Z",
+            "eval_command": "echo test",
+        }
+        bp = tmp_path / "baseline_metric.json"
+        bp.write_text(json.dumps(baseline))
+
+        # max_lesson_cycles=1 → only most recent cycle's lessons
+        bundle = load_context_bundle(
+            repo_path=tmp_path, question="test",
+            evolution_dir=evo_dir, baseline_path=bp,
+            max_lesson_cycles=1,
+        )
+
+        # Should only contain the lesson from the most recent cycle
+        assert len(bundle["prior_lessons"]) == 1
+        assert "20260303_000000" in bundle["prior_lessons"][0]

@@ -59,6 +59,7 @@ class LessonEntry:
     description: str
     timestamp: str  # ISO 8601
     run_id: str = ""
+    cycle_status: str = "complete"  # "complete", "failed", "partial"
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -73,6 +74,7 @@ class LessonEntry:
             description=str(data.get("description", "")),
             timestamp=str(data.get("timestamp", "")),
             run_id=str(data.get("run_id", "")),
+            cycle_status=str(data.get("cycle_status", "complete")),
         )
 
 
@@ -385,14 +387,47 @@ class EvolutionStore:
         return lessons
 
     def query_for_stage(
-        self, stage_name: str, *, max_lessons: int = 5
+        self,
+        stage_name: str,
+        *,
+        max_lessons: int = 5,
+        max_cycles: int = 0,
     ) -> list[LessonEntry]:
         """Return the most relevant lessons for a stage, weighted by recency.
 
         Includes lessons that directly match the stage, plus high-severity
         lessons from related stages.
+
+        Args:
+            stage_name: Stage name to boost (2x weight for direct matches).
+            max_lessons: Maximum number of lessons to return.
+            max_cycles: Only include lessons from the K most recent
+                **complete** cycles.  0 means no cycle cap (time-decay
+                still applies).
         """
         all_lessons = self.load_all()
+
+        # Filter out lessons from failed cycles (infrastructure crashes with
+        # no hypothesis data).  Keep "complete" (Stage 7 archive), "partial"
+        # (eager writes from Stage 6 — cycle may not have finished), and
+        # legacy entries without the field (default to "complete").
+        all_lessons = [
+            l for l in all_lessons
+            if l.cycle_status != "failed"
+        ]
+
+        # Cap to K most recent cycles by run_id (timestamp-based IDs sort chronologically)
+        if max_cycles > 0:
+            cycle_ids = sorted(
+                {l.run_id for l in all_lessons if l.run_id},
+                reverse=True,
+            )[:max_cycles]
+            cycle_id_set = set(cycle_ids)
+            all_lessons = [
+                l for l in all_lessons
+                if l.run_id in cycle_id_set or not l.run_id
+            ]
+
         scored: list[tuple[float, LessonEntry]] = []
         for lesson in all_lessons:
             weight = _time_weight(lesson.timestamp)
@@ -466,6 +501,144 @@ class EvolutionStore:
                     )
 
         return "\n".join(parts)
+
+    def compact(self) -> int:
+        """Remove expired (>90 days) and duplicate lessons.
+
+        Deduplicates by ``(run_id, description[:100])``.  When duplicates
+        exist, prefers ``cycle_status="complete"`` over ``"partial"`` so
+        that Stage 7 archive entries supersede eager Stage 6 writes.
+        Also drops lessons whose time-decay weight has reached zero
+        (older than ``MAX_AGE_DAYS``).
+
+        Returns the number of entries removed.
+        """
+        all_lessons = self.load_all()
+        before = len(all_lessons)
+        if before == 0:
+            return 0
+
+        # Drop expired entries
+        kept: list[LessonEntry] = [
+            l for l in all_lessons if _time_weight(l.timestamp) > 0.0
+        ]
+
+        # Deduplicate by (run_id, description prefix).
+        # Prefer "complete" over "partial" when both exist for the same key.
+        best: dict[tuple[str, str], LessonEntry] = {}
+        _STATUS_RANK = {"complete": 2, "partial": 1}
+        for lesson in kept:
+            key = (lesson.run_id, lesson.description[:100])
+            existing = best.get(key)
+            if existing is None:
+                best[key] = lesson
+            elif _STATUS_RANK.get(lesson.cycle_status, 0) > _STATUS_RANK.get(
+                existing.cycle_status, 0
+            ):
+                best[key] = lesson
+        deduped = list(best.values())
+
+        removed = before - len(deduped)
+        if removed > 0:
+            self._lessons_path.write_text(
+                "".join(
+                    json.dumps(l.to_dict(), ensure_ascii=False) + "\n"
+                    for l in deduped
+                ),
+                encoding="utf-8",
+            )
+            logger.info(
+                "Compacted evolution store: %d → %d entries (%d removed)",
+                before, len(deduped), removed,
+            )
+        return removed
+
+    @staticmethod
+    def cleanup_cycles(
+        cycles_dir: Path,
+        *,
+        keep_complete: int = 3,
+    ) -> list[str]:
+        """Clean up cycle directories that are no longer needed.
+
+        Removes, in order:
+        1. **Stage-1 failures** — crashed at setup, no artifacts.
+        2. **Orphan dirs** — no checkpoint file (manual test dirs, etc.).
+        3. **Partial cycles** — reached execution but never completed
+           Stage 8.  With eager lesson writes, their hypothesis results
+           are already in ``lessons.jsonl``.
+        4. **Old complete cycles** beyond the *keep_complete* retention
+           window.  The most recent *keep_complete* complete cycles are
+           preserved for auditing.
+
+        Args:
+            cycles_dir: Path to ``<repo>/.ahvs/cycles/``.
+            keep_complete: Number of most-recent complete cycles to retain
+                (default 3).  Set to 0 to keep all complete cycles.
+
+        Returns list of removed directory names.
+        """
+        import shutil
+
+        removed: list[str] = []
+        if not cycles_dir.is_dir():
+            return removed
+
+        # Classify every cycle dir
+        failed: list[Path] = []
+        orphan: list[Path] = []
+        partial: list[Path] = []
+        complete: list[Path] = []
+
+        for cycle_dir in sorted(cycles_dir.iterdir()):
+            if not cycle_dir.is_dir():
+                continue
+            checkpoint = cycle_dir / "ahvs_checkpoint.json"
+            if not checkpoint.exists():
+                orphan.append(cycle_dir)
+                continue
+            try:
+                data = json.loads(checkpoint.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                orphan.append(cycle_dir)
+                continue
+
+            status = data.get("status", "")
+            stage_num = data.get("stage_num", 0)
+
+            if status == "failed" and stage_num <= 1:
+                failed.append(cycle_dir)
+            elif status == "done" and stage_num >= 8:
+                complete.append(cycle_dir)
+            else:
+                partial.append(cycle_dir)
+
+        # 1–3: Remove all failed, orphan, and partial dirs
+        for d in failed + orphan + partial:
+            try:
+                shutil.rmtree(d)
+                removed.append(d.name)
+            except OSError:
+                continue
+
+        # 4: Trim old complete cycles beyond the retention window.
+        #    complete list is already sorted by name (timestamp-based),
+        #    so the last `keep_complete` entries are the most recent.
+        if keep_complete > 0 and len(complete) > keep_complete:
+            to_remove = complete[:-keep_complete]
+            for d in to_remove:
+                try:
+                    shutil.rmtree(d)
+                    removed.append(d.name)
+                except OSError:
+                    continue
+
+        if removed:
+            logger.info(
+                "Cleaned up %d cycle dir(s): %s",
+                len(removed), ", ".join(removed),
+            )
+        return removed
 
     def count(self) -> int:
         """Return total number of stored lessons."""

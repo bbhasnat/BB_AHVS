@@ -93,6 +93,24 @@ def execute_ahvs_cycle(
     cycle_dir = config.run_dir
     cycle_dir.mkdir(parents=True, exist_ok=True)
 
+    # Auto-cleanup: remove stale cycle dirs + compact old lessons
+    cycles_root = config.repo_path / ".ahvs" / "cycles"
+    if cycles_root.is_dir():
+        try:
+            from ahvs.evolution import EvolutionStore
+
+            removed = EvolutionStore.cleanup_cycles(cycles_root, keep_complete=3)
+            if removed:
+                print(f"[AHVS] Cleaned up {len(removed)} stale cycle dir(s)")
+
+            if config.evolution_dir.exists():
+                store = EvolutionStore(config.evolution_dir)
+                compacted = store.compact()
+                if compacted:
+                    print(f"[AHVS] Compacted evolution store: removed {compacted} stale entries")
+        except Exception:  # noqa: BLE001
+            pass  # Non-fatal — don't block the cycle for cleanup issues
+
     if skill_library is None:
         skill_library = SkillLibrary(
             custom_registry_path=config.skill_registry_path
