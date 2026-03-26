@@ -1,0 +1,190 @@
+# AHVS Prompt Overrides — Traditional ML Domain Pack
+#
+# Use with: ahvs --repo . --question "..." --prompts ahvs/domain_packs/ml_prompts.yaml
+#
+# This overrides the default LLM/RAG-focused prompts with ML-specific framing.
+# Only the hypothesis generation and validation planning prompts are overridden;
+# report writing uses the default (it's already domain-agnostic).
+
+stages:
+  ahvs_hypothesis_gen:
+    system: >-
+      You are an expert machine learning engineer specialising in model
+      performance optimisation. Your task is to generate concrete, testable
+      hypotheses to improve a traditional ML model (classifier, regressor,
+      ranking model, etc.) based on a specific question and the system's
+      current performance context. Focus on feature engineering, algorithm
+      selection, hyperparameter tuning, data preprocessing, sampling
+      strategies, and pipeline architecture — NOT on LLM prompts, RAG
+      retrieval, or language model configuration. Be specific, practical,
+      and grounded in the provided baseline and prior lessons.
+    user: >-
+      # AHVS Hypothesis Generation — ML Domain
+
+
+      ## Cycle Question
+
+      {question}
+
+
+      ## Baseline Performance
+
+      - Primary metric: {metric_name}
+
+      - Current value: {baseline_value}
+
+      - Eval command: {eval_command}
+
+
+      ## Domain Tags
+
+      {domain_tags}
+
+
+      ## Operator Context
+
+      {enriched_context}
+
+
+      ## Prior Lessons (from previous cycles)
+
+      {prior_lessons}
+
+
+      ## Rejected Approaches (do not repeat these)
+
+      {rejected_approaches}
+
+
+      ---
+
+
+      Generate {max_hypotheses} concrete hypotheses to address the cycle question.
+
+      Each hypothesis must:
+
+      1. Be falsifiable and measurable against the baseline metric
+
+      2. Have a clear type from: code_change | config_change | architecture_change
+
+      3. Avoid repeating any rejected approaches listed above
+
+      4. Be achievable in a single AHVS cycle
+
+      5. Focus on ML-specific improvements:
+         - Feature engineering (new features, feature selection, transformations)
+         - Algorithm/model selection (swap classifier, ensemble methods, boosting)
+         - Hyperparameter tuning (learning rate, regularization, tree depth, etc.)
+         - Data preprocessing (normalization, encoding, imputation, outlier handling)
+         - Sampling strategy (class weighting, oversampling, undersampling, SMOTE)
+         - Loss function changes (custom loss, focal loss, class-weighted loss)
+         - Pipeline architecture (add/remove stages, change execution order)
+         - Evaluation methodology (cross-validation, stratification, threshold calibration)
+
+      6. Prefer diverse approaches across hypotheses — mix feature, algorithm, and config changes
+
+      7. Do NOT generate prompt_rewrite, model_comparison, dspy_optimize, or multi_llm_judge
+         hypotheses — these are LLM-specific and not applicable to traditional ML models
+
+
+      Type guidance:
+
+      - code_change: modify algorithms, feature engineering, model selection, data processing.
+        Real code changes to the ML pipeline.
+
+      - config_change: tune hyperparameters, thresholds, class weights. Config/parameter only.
+
+      - architecture_change: redesign pipeline components — new preprocessing stages,
+        ensemble architectures, stacking, feature stores, train/eval splits.
+
+
+      Format each hypothesis EXACTLY as:
+
+
+      ## H1
+
+      **Type:** <hypothesis_type>
+
+      **Description:** <what to change and how>
+
+      **Rationale:** <why this might improve the metric, referencing prior lessons if relevant>
+
+      **Estimated Cost:** low | medium | high
+
+      **Required Tools:** <comma-separated list, or "none">
+
+
+      ## H2
+
+      ...
+    max_tokens: 2000
+
+  ahvs_validation_plan:
+    system: >-
+      You are an expert machine learning engineer. Your task is to create a
+      detailed validation plan for selected hypotheses targeting a traditional
+      ML model. The plan specifies exactly how each hypothesis will be
+      implemented and evaluated against the baseline metric. Focus on
+      reproducibility, statistical validity, and clean experimental design.
+    user: >-
+      # AHVS Validation Plan — ML Domain
+
+
+      ## Cycle Question
+
+      {question}
+
+
+      ## Baseline
+
+      - Metric: {metric_name} = {baseline_value}
+
+      - Eval command: {eval_command}
+
+
+      ## Selected Hypotheses
+
+      {selected_hypotheses_text}
+
+
+      ## Available Skills
+
+      {available_skills_block}
+
+
+      ---
+
+
+      For each selected hypothesis, produce a validation plan section.
+
+      For ML-specific hypotheses, consider:
+
+      - Whether the change requires retraining or just re-evaluation
+
+      - How to handle train/test split consistency
+
+      - Whether cross-validation is needed for reliable measurement
+
+      - What intermediate artifacts to inspect (confusion matrix, feature importances)
+
+
+      Format EXACTLY as:
+
+
+      ## H1
+
+      **Implementation Approach:** <step-by-step description of what to build or modify>
+
+      **Eval Method:** custom_script
+
+      **Skill:** local_run
+
+      **Success Criterion:** {metric_name} >= <target_value>
+      (current: {baseline_value}, required delta: <+X.XX>)
+
+      **Expected Artifacts:** <comma-separated list of files to produce>
+
+
+      ## H2
+
+      ...

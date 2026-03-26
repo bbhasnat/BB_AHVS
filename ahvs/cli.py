@@ -22,14 +22,25 @@ def cmd_ahvs(args: argparse.Namespace) -> int:
         print(f"Error: repo path does not exist: {repo_path}", file=sys.stderr)
         return 1
 
+    # Resolve domain pack paths (--domain overrides --prompts/--skill-registry)
+    _prompts_path = _Path(args.prompts).resolve() if args.prompts else None
+    _skills_path = _Path(args.skill_registry).resolve() if args.skill_registry else None
+    domain = getattr(args, "domain", None)
+    if domain and domain != "llm":
+        _pack_dir = _Path(__file__).resolve().parent / "domain_packs"
+        if not _prompts_path:
+            _prompts_path = _pack_dir / f"{domain}_prompts.yaml"
+        if not _skills_path:
+            _skills_path = _pack_dir / f"{domain}_skills.yaml"
+
     config = AHVSConfig(
         repo_path=repo_path,
         question=args.question,
         max_hypotheses=args.max_hypotheses,
         regression_guard_path=_Path(args.regression_guard).resolve() if args.regression_guard else None,
         apply_best=getattr(args, "apply_best", False),
-        skill_registry_path=_Path(args.skill_registry).resolve() if args.skill_registry else None,
-        prompts_override_path=_Path(args.prompts).resolve() if args.prompts else None,
+        skill_registry_path=_skills_path,
+        prompts_override_path=_prompts_path,
         llm_provider=args.provider or "anthropic",
         llm_base_url=getattr(args, "base_url", "") or "",
         llm_model=args.model or "claude-opus-4-6",
@@ -298,6 +309,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--resume", action="store_true",
         help="Resume from the last written checkpoint in the cycle directory",
+    )
+    parser.add_argument(
+        "--domain",
+        choices=["llm", "ml"],
+        help=(
+            "Load a domain pack that sets prompts and skills for the target domain. "
+            "'llm' (default) uses LLM/RAG-focused prompts and skills. "
+            "'ml' uses traditional ML-focused prompts (feature engineering, "
+            "hyperparameter tuning, algorithm selection) and ML skill templates. "
+            "Equivalent to --prompts + --skill-registry with the domain pack YAMLs."
+        ),
     )
     parser.add_argument(
         "--skill-registry",

@@ -125,6 +125,7 @@ _AHVS_STAGES: dict[str, dict[str, Any]] = {
             "## Baseline\n"
             "- Metric: {metric_name} = {baseline_value}\n"
             "- Eval command: {eval_command}\n\n"
+            "{eval_dependency_context}"
             "## Selected Hypotheses\n{selected_hypotheses_text}\n\n"
             "## Available Skills\n{available_skills_block}\n\n"
             "---\n\n"

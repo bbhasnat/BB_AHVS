@@ -464,6 +464,7 @@ ahvs [options]
 | `--until-stage` | *(last stage)* | Stop after this stage (e.g. `AHVS_HYPOTHESIS_GEN`). Useful for split workflows — generate hypotheses, select via GUI, then resume. |
 | `--resume` | off | Resume from last written checkpoint |
 | `--regression-guard` | none | Path to regression guard shell script |
+| `--domain` | *(none)* | Domain pack: `llm` (default) or `ml` (traditional ML). Sets prompts + skills automatically. |
 | `--skill-registry` | none | Path to custom skill registry YAML |
 | `--prompts` | none | Path to AHVS prompts override YAML |
 | `--model` | `claude-opus-4-6` | LLM model ID |
@@ -555,6 +556,36 @@ This means the taxonomy controls *what Claude Code is instructed to do*, not *wh
 ### Pre-flight tool checks
 
 AHVS runs a secondary pre-flight check *after* hypothesis selection (Stage 4) to verify the tools needed for selected hypothesis types are available. This check skips the LLM connectivity test (already verified at Stage 1) and focuses only on tool availability. If a tool is missing, AHVS warns and asks for confirmation before proceeding.
+
+### Domain packs: using AHVS with traditional ML models
+
+By default, AHVS is tuned for LLM/RAG optimization. To use it with traditional ML models (classifiers, regressors, ranking models), use the `--domain ml` flag:
+
+```bash
+ahvs \
+  --repo /path/to/my-classifier \
+  --question "Improve F1 score on the churn prediction model" \
+  --domain ml \
+  --max-hypotheses 3
+```
+
+This loads the ML domain pack, which:
+- **Overrides hypothesis generation prompts** — focuses on feature engineering, hyperparameter tuning, algorithm selection, sampling strategies, and pipeline architecture instead of LLM prompts and retrieval
+- **Restricts hypothesis types** to `code_change`, `config_change`, and `architecture_change` (excludes LLM-specific types like `prompt_rewrite`, `dspy_optimize`, etc.)
+- **Provides ML-specific skill templates** — `sklearn_eval`, `hyperparameter_sweep`, `feature_importance`, `confusion_matrix`, `cross_validate`
+
+The domain pack files live in `ahvs/domain_packs/`:
+- `ml_prompts.yaml` — hypothesis generation and validation plan prompts
+- `ml_skills.yaml` — ML tool descriptions for Claude Code's context
+
+You can also use them explicitly:
+```bash
+ahvs --repo . --question "..." \
+  --prompts ahvs/domain_packs/ml_prompts.yaml \
+  --skill-registry ahvs/domain_packs/ml_skills.yaml
+```
+
+The core pipeline (worktrees, eval_command, metric extraction, cross-cycle memory) works identically for ML and LLM targets. Only the hypothesis generation and skill context differ.
 
 ---
 
@@ -818,6 +849,9 @@ ahvs/
 ├── runner.py                # execute_ahvs_cycle() — outer orchestration loop
 ├── evolution.py             # EvolutionStore — cross-cycle memory persistence
 ├── cli.py                   # CLI entry point (ahvs command)
+├── domain_packs/            # Domain-specific prompt + skill overrides
+│   ├── ml_prompts.yaml      # Traditional ML hypothesis prompts (--domain ml)
+│   └── ml_skills.yaml       # ML skill templates (sklearn, optuna, etc.)
 ├── llm/                     # LLM client factory
 │   ├── __init__.py
 │   ├── client.py            # Provider-agnostic LLM client
@@ -1098,28 +1132,19 @@ AHVS already has a strong generic execution contract: repo + baseline metric + `
 #### Execution scalability
 
 1. **Parallel hypothesis execution**
-   Hypotheses currently run sequentially. Parallel execution is feasible, but it needs two fixes first.
-2. **Run Claude Code inside per-hypothesis worktrees**
-   Two concurrent Claude Code processes should not edit the shared main repo. The clean fix is to create worktrees first and run each hypothesis agent inside its own worktree.
-3. **Add locking around `git worktree add/remove`**
-   Worktree operations are not atomic. Add a file lock such as `fcntl.flock` around create/remove operations to avoid metadata corruption.
-4. **Improve unattended throughput**
+   Hypotheses currently run sequentially. Parallel execution is feasible — Claude Code already runs inside per-hypothesis worktrees (done), so two remaining items are needed:
+   - Add `fcntl.flock` around `git worktree add/remove` to prevent metadata corruption
+   - Use `concurrent.futures` or `asyncio.gather` over the hypothesis list
+2. **Improve unattended throughput**
    `save_results` already supports merge-by-ID accumulation, so batch and unattended execution should benefit once parallelism is in place. Multi-agent supervised mode benefits less because the observer verifies between hypotheses.
 
 #### Domain expansion
 
-1. **Formalize a real domain-adapter boundary**
-   Introduce a first-class adapter/plugin interface for domain-specific hypothesis generation hints, validation rules, success criteria, and optional tool checks. This replaces the current implicit coupling through prompt text and built-in hypothesis labels.
-2. **Split generic hypothesis types from domain-specific packs**
-   Keep core types such as `config_change`, `code_change`, and `architecture_change` in the base system, and move LLM-specific types such as `prompt_rewrite`, `model_comparison`, `dspy_optimize`, and `multi_llm_judge` into an LLM/RAG domain pack.
-3. **Add an ML text-classifier domain pack**
-   Provide classifier-oriented prompts, examples, and skills for common levers such as threshold calibration, class weighting, preprocessing/tokenization, sampling, loss changes, model-head changes, and training/inference pipeline improvements.
-4. **Generalize success criteria beyond single LLM-style metrics**
-   Preserve the current primary-metric contract, but improve first-class support for regression floors and multi-metric objectives such as `macro_f1`, precision/recall tradeoffs, calibration error, latency, and training cost.
-5. **Promote custom skills into domain-scoped libraries**
-   Make it easy to register reusable skill bundles for classifier training/eval, benchmark runners, ablation scripts, and algorithmic pipelines instead of assuming Promptfoo/DSPy-style tooling is the main path.
-6. **Broaden docs and onboarding examples**
-   Add end-to-end examples for non-RAG repos, especially text classification and general algorithmic optimization tasks, so users can onboard those targets without translating from answer-relevance/RAG examples.
+The `--domain` flag and YAML-based domain packs (`ahvs/domain_packs/`) provide the adapter mechanism. Two domain packs are available: `llm` (default, LLM/RAG optimization) and `ml` (traditional ML — classifiers, regressors, NLP, CV, time series, etc.). For specialized tool chains (e.g., Hugging Face Trainer, torchvision augmentation), use `--skill-registry` with a project-specific YAML. Remaining work:
+
+1. **Multi-metric optimization** — Preserve the current primary-metric contract, but add first-class support for Pareto-optimal selection across multiple metrics (e.g., precision *and* recall, accuracy *and* latency)
+2. **Data analytics domain (exploratory)** — Investigate whether AHVS can drive data-focused hypothesis cycles: dataset selection, feature subset optimization, preprocessing pipeline tuning, data augmentation experiments. These fit the current loop well when there's a clear downstream metric (e.g., "which cleaning pipeline gives the best F1?"). Open-ended exploration (EDA, pattern discovery) would need a different output contract since AHVS currently requires a single numeric metric. A `data_prompts.yaml` pack would be the first step; structural changes only if prompt-level framing proves insufficient.
+3. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression, data preprocessing) so users can see the full onboarding → cycle → results flow
 
 #### Memory management
 

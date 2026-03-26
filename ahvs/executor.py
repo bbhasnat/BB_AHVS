@@ -664,6 +664,121 @@ def _find_python_and_module(eval_command: str) -> _ParsedEvalCommand | None:
     )
 
 
+def _find_eval_entry_script(eval_command: str) -> str | None:
+    """Extract the Python script name from an eval_command.
+
+    Handles shapes like:
+      - ``python run_eval.py --flag``
+      - ``cd /path && python run_eval.py --flag``
+      - ``python -m pkg.mod`` (returns None — use _find_python_and_module)
+
+    Returns the script filename (e.g. ``run_eval.py``) or None.
+    """
+    import shlex
+
+    # Strip leading cd
+    cmd = eval_command
+    for sep in ("&&", ";"):
+        if sep in cmd:
+            segments = cmd.split(sep)
+            for seg in reversed(segments):
+                stripped = seg.strip()
+                if "python" in stripped.lower():
+                    cmd = stripped
+                    break
+            break
+
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        parts = cmd.split()
+
+    # Skip env vars, find python executable, then look for a .py arg
+    python_found = False
+    for part in parts:
+        if not python_found:
+            if "python" in part.lower():
+                python_found = True
+            continue
+        # Skip flags
+        if part.startswith("-"):
+            # -m means module mode — not a script
+            if part == "-m":
+                return None
+            continue
+        # First positional arg after python — should be the script
+        if part.endswith(".py"):
+            return part
+        break
+    return None
+
+
+def _analyze_eval_dependencies(
+    eval_command: str, repo_path: Path,
+) -> tuple[str | None, list[str], list[str]]:
+    """Analyze which repo files the eval entry point imports from.
+
+    Returns (entry_point_name, imported_repo_files, all_repo_py_files).
+    ``imported_repo_files`` lists repo-relative paths of Python files that
+    the eval entry point directly imports.  If the entry point cannot be
+    found or parsed, returns (None, [], all_files).
+    """
+    import ast as _ast
+
+    script_name = _find_eval_entry_script(eval_command)
+    if script_name is None:
+        return None, [], []
+
+    entry_path = repo_path / script_name
+    if not entry_path.is_file():
+        return script_name, [], []
+
+    try:
+        source = entry_path.read_text(encoding="utf-8")
+        tree = _ast.parse(source, filename=script_name)
+    except (SyntaxError, OSError):
+        return script_name, [], []
+
+    # Collect all top-level module names from import statements
+    imported_modules: set[str] = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                imported_modules.add(alias.name.split(".")[0])
+        elif isinstance(node, _ast.ImportFrom):
+            if node.module:
+                imported_modules.add(node.module.split(".")[0])
+
+    # Check which imported module names correspond to repo-local .py files
+    # or packages (directories with __init__.py)
+    imported_repo_files: list[str] = []
+    for mod_name in sorted(imported_modules):
+        # Check for module_name.py
+        candidate = repo_path / f"{mod_name}.py"
+        if candidate.is_file():
+            imported_repo_files.append(f"{mod_name}.py")
+            continue
+        # Check for package (dir with __init__.py)
+        pkg_dir = repo_path / mod_name
+        if pkg_dir.is_dir() and (pkg_dir / "__init__.py").exists():
+            imported_repo_files.append(f"{mod_name}/")
+
+    # Gather all repo Python files for comparison
+    all_repo_py: list[str] = []
+    try:
+        all_repo_py = sorted(
+            str(p.relative_to(repo_path))
+            for p in repo_path.rglob("*.py")
+            if ".ahvs" not in p.parts
+            and "__pycache__" not in p.parts
+            and ".git" not in p.parts
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    return script_name, imported_repo_files, all_repo_py
+
+
 def _run_import_sanity_check(
     worktree: "HypothesisWorktree",
     eval_command: str,
@@ -1541,15 +1656,57 @@ def _execute_validation_plan(
     skills_block = skill_library.to_context_block(all_applicable_skills) or "No skills available."
 
     baseline = bundle["baseline"]
+
+    # ── Eval dependency analysis for validation plan grounding ─────────
+    # Without this, the LLM generates plans that modify files the eval
+    # never imports (e.g. Train_model.py when run_eval.py is
+    # self-contained), dooming the hypothesis before execution begins.
+    eval_dep_context = ""
+    eval_command = baseline.get("eval_command", "")
+    if eval_command:
+        entry_name, eval_deps, _all_py = _analyze_eval_dependencies(
+            eval_command, config.repo_path,
+        )
+        if entry_name is not None:
+            if eval_deps:
+                deps_list = ", ".join(f"`{d}`" for d in eval_deps)
+                eval_dep_context = (
+                    f"## Eval Dependency Graph — CRITICAL\n"
+                    f"The eval entry point `{entry_name}` imports from "
+                    f"these repo-local files: {deps_list}.\n"
+                    f"**Only changes to these files (or files they "
+                    f"transitively import) will affect the measured "
+                    f"metric.** Plans that modify other files will have "
+                    f"no effect.\n\n"
+                )
+            else:
+                eval_dep_context = (
+                    f"## ⚠ SELF-CONTAINED EVAL — PLANS MUST TARGET `{entry_name}` ⚠\n"
+                    f"The eval entry point `{entry_name}` does NOT "
+                    f"import from any other repo source files. It is "
+                    f"**self-contained** with its own training loop, "
+                    f"model setup, and evaluation logic.\n\n"
+                    f"**Changes to other Python files (e.g. "
+                    f"`Train_model.py`) will have ZERO effect on the "
+                    f"metric.**\n\n"
+                    f"The framework will safely apply changes to "
+                    f"`{entry_name}` via AST splice (merging only "
+                    f"changed functions/classes). Plans MUST instruct "
+                    f"the code agent to output modified functions from "
+                    f"`{entry_name}` directly — NOT to modify other "
+                    f"files like `Train_model.py`.\n\n"
+                )
+
     pm = AHVSPromptManager(config.prompts_override_path)
     prompt = pm.for_stage(
         "ahvs_validation_plan",
         question=config.question,
         metric_name=baseline["primary_metric"],
         baseline_value=str(baseline["value"]),
-        eval_command=baseline.get("eval_command", ""),
+        eval_command=eval_command,
         selected_hypotheses_text=selected_text,
         available_skills_block=skills_block,
+        eval_dependency_context=eval_dep_context,
     )
 
     try:
@@ -1939,6 +2096,64 @@ def _run_single_hypothesis(
             f"existing source files (listed above) will affect the result.\n"
             f"Standalone scripts you create will NOT be executed.\n\n"
         )
+
+        # Analyze eval entry point dependencies to guide Claude Code
+        entry_name, eval_deps, _all_py = _analyze_eval_dependencies(
+            eval_command, config.repo_path,
+        )
+        _eval_is_self_contained = False
+        if entry_name is not None:
+            if eval_deps:
+                deps_list = ", ".join(f"`{d}`" for d in eval_deps)
+                eval_section += (
+                    f"## Eval Dependency Graph — CRITICAL\n"
+                    f"The eval entry point `{entry_name}` imports from these "
+                    f"repo-local files: {deps_list}.\n"
+                    f"**Only changes to these files (or files they transitively "
+                    f"import) will affect the measured metric.**\n"
+                    f"Changes to other repo files will have NO effect on the "
+                    f"eval result.\n\n"
+                )
+            else:
+                # Self-contained eval — the framework will splice changes
+                # into the eval entry point via AST merge (safe: only
+                # replaces changed functions/classes, preserves the rest).
+                _eval_is_self_contained = True
+                eval_section += (
+                    f"## ⚠ SELF-CONTAINED EVAL — MODIFY `{entry_name}` DIRECTLY ⚠\n"
+                    f"The eval entry point `{entry_name}` does NOT import from "
+                    f"any other repo source files. It is **self-contained** — "
+                    f"it has its own training loop, model setup, and evaluation "
+                    f"logic.\n\n"
+                    f"**Changes to other Python files (e.g. `Train_model.py`) "
+                    f"will have ZERO effect on the measured metric.**\n\n"
+                    f"**You MUST output your changes as modifications to "
+                    f"`{entry_name}` itself.** Output ONLY the functions, "
+                    f"classes, or constants you are changing — the framework "
+                    f"will safely splice them into the existing file via AST "
+                    f"merge (replacing only the definitions you provide while "
+                    f"preserving everything else).\n\n"
+                    f"Do NOT modify `Train_model.py` or other files that "
+                    f"`{entry_name}` does not import — those changes will be "
+                    f"ignored.\n\n"
+                )
+                logger.info(
+                    "Eval entry point %s is self-contained — enabling "
+                    "AST-splice passthrough for forbidden file filter.",
+                    entry_name,
+                )
+
+        # When eval is self-contained, update the PROTECTED FILES section
+        # to avoid contradicting the splice-allowed guidance above.
+        if _eval_is_self_contained and entry_name:
+            repo_grounding = repo_grounding.replace(
+                f"**BLOCKED (changes will be rejected by the framework):**\n"
+                f"- `run_eval.py` or any file matching `**/run_eval.py` (eval entry point)\n",
+                f"**BLOCKED (changes will be rejected by the framework):**\n"
+                f"- ~~`run_eval.py`~~ **SPLICE-ALLOWED** — self-contained eval; "
+                f"your changes to `{entry_name}` will be merged via AST splice "
+                f"(only changed functions/classes are replaced)\n",
+            )
     problem = (
         f"# AHVS Hypothesis Execution\n\n"
         f"## Hypothesis {hyp_id}\n"
@@ -2099,6 +2314,33 @@ def _run_single_hypothesis(
         for filename, content in remapped_files.items():
             reason = _is_forbidden_file(filename, repo_has_src=_repo_has_src)
             if reason is not None:
+                # ── Self-contained eval splice passthrough ─────────
+                # When the eval is self-contained (no repo-local imports),
+                # the eval entry point is the ONLY file that matters.
+                # Instead of hard-blocking it, allow it through — the
+                # existing splice=True in apply_files() will merge only
+                # the changed functions/classes via AST splice, preserving
+                # the eval infrastructure.
+                from pathlib import PurePosixPath as _PP2
+                _basename = _PP2(filename).name
+                if (
+                    _eval_is_self_contained
+                    and entry_name is not None
+                    and _basename == entry_name
+                ):
+                    logger.info(
+                        "%s: SPLICE-PASSTHROUGH for %s — eval is "
+                        "self-contained, allowing AST-spliced changes "
+                        "to eval entry point (would normally be blocked: %s)",
+                        hyp_id, filename, reason,
+                    )
+                    print(
+                        f"[AHVS] {hyp_id}: allowing {filename} via AST "
+                        f"splice (self-contained eval passthrough)"
+                    )
+                    filtered_files[filename] = content
+                    continue
+
                 logger.warning(
                     "%s: BLOCKED %s from worktree apply — %s",
                     hyp_id, filename, reason,
