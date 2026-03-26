@@ -99,7 +99,7 @@ def execute_ahvs_cycle(
         try:
             from ahvs.evolution import EvolutionStore
 
-            removed = EvolutionStore.cleanup_cycles(cycles_root, keep_complete=3)
+            removed = EvolutionStore.cleanup_cycles(cycles_root, keep_complete=3, exclude=cycle_dir)
             if removed:
                 print(f"[AHVS] Cleaned up {len(removed)} stale cycle dir(s)")
 

@@ -558,6 +558,7 @@ class EvolutionStore:
         cycles_dir: Path,
         *,
         keep_complete: int = 3,
+        exclude: Path | None = None,
     ) -> list[str]:
         """Clean up cycle directories that are no longer needed.
 
@@ -575,6 +576,8 @@ class EvolutionStore:
             cycles_dir: Path to ``<repo>/.ahvs/cycles/``.
             keep_complete: Number of most-recent complete cycles to retain
                 (default 3).  Set to 0 to keep all complete cycles.
+            exclude: If given, this cycle directory is never removed
+                (used to protect the currently-running cycle).
 
         Returns list of removed directory names.
         """
@@ -590,8 +593,11 @@ class EvolutionStore:
         partial: list[Path] = []
         complete: list[Path] = []
 
+        exclude_resolved = exclude.resolve() if exclude else None
         for cycle_dir in sorted(cycles_dir.iterdir()):
             if not cycle_dir.is_dir():
+                continue
+            if exclude_resolved and cycle_dir.resolve() == exclude_resolved:
                 continue
             checkpoint = cycle_dir / "ahvs_checkpoint.json"
             if not checkpoint.exists():
