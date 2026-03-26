@@ -1175,7 +1175,9 @@ The `--domain` flag and YAML-based domain packs (`ahvs/domain_packs/`) provide t
 2. **Data analytics domain (exploratory)** — Investigate whether AHVS can drive data-focused hypothesis cycles: dataset selection, feature subset optimization, preprocessing pipeline tuning, data augmentation experiments. These fit the current loop well when there's a clear downstream metric (e.g., "which cleaning pipeline gives the best F1?"). Open-ended exploration (EDA, pattern discovery) would need a different output contract since AHVS currently requires a single numeric metric. A `data_prompts.yaml` pack would be the first step; structural changes only if prompt-level framing proves insufficient.
 3. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression, data preprocessing) so users can see the full onboarding → cycle → results flow
 
-#### Memory management
+#### Memory management *(mostly complete)*
+
+The core memory management overhaul is implemented (see [docs/memory_management_system.md](docs/memory_management_system.md)): structured outcome fields on lessons, two-phase semantic deduplication, Stage 8 verification feedback, friction log summarization, session memory lifecycle (stale marking + archival), historical digest for context window expansion, and cross-project learning via GlobalEvolutionStore. Remaining items:
 
 1. **Browser GUI for manual lesson/memory cleanup**
    Add an interactive browser-based GUI (similar to hypothesis selector) that lets the operator inspect, filter, and selectively delete individual lessons from `lessons.jsonl` and memory files from `.ahvs/memory/`. Useful for curating cross-cycle memory when automatic compaction is insufficient.
@@ -1220,7 +1222,7 @@ If either the original or partial file has syntax errors, the merge falls back g
 
 ### Test coverage
 
-229 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, memory management (cycle cleanup, lesson compaction, eager writes, cycle-status filtering), and regression tests for all known framework bugs.
+271 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, memory management (cycle cleanup, lesson compaction, eager writes, cycle-status filtering, structured outcomes, semantic deduplication, verification feedback, friction log summarization, memory file lifecycle, historical digest, cross-project learning), and regression tests for all known framework bugs.
 
 Tests work from a fresh checkout — no `pip install -e .` or `PYTHONPATH` required (`conftest.py` bootstraps the import path):
 
