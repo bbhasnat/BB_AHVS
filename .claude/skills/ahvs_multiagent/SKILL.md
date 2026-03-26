@@ -100,6 +100,11 @@ Tell the user: "Generated {N} hypotheses. Opening selection GUI..."
 
 This is a **blocking call** — it starts a localhost HTTP server and opens the browser. The human sees hypothesis cards with checkboxes. When they click Submit, the script writes `selection.json` and exits.
 
+**CRITICAL: After launching the GUI, you MUST immediately tell the user:**
+> "Please open **http://localhost:8765/** in your browser, select the hypotheses you want to run, and click **Submit**. I am blocked until you submit your selection."
+
+Do NOT silently wait. The user may not know the GUI is running or that their action is required. Always give the explicit URL and required action.
+
 Run this as a **foreground** Bash call (not `run_in_background`). The Bash tool returns when the human submits.
 
 After it returns, read the selection:
