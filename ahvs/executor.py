@@ -664,6 +664,121 @@ def _find_python_and_module(eval_command: str) -> _ParsedEvalCommand | None:
     )
 
 
+def _find_eval_entry_script(eval_command: str) -> str | None:
+    """Extract the Python script name from an eval_command.
+
+    Handles shapes like:
+      - ``python run_eval.py --flag``
+      - ``cd /path && python run_eval.py --flag``
+      - ``python -m pkg.mod`` (returns None — use _find_python_and_module)
+
+    Returns the script filename (e.g. ``run_eval.py``) or None.
+    """
+    import shlex
+
+    # Strip leading cd
+    cmd = eval_command
+    for sep in ("&&", ";"):
+        if sep in cmd:
+            segments = cmd.split(sep)
+            for seg in reversed(segments):
+                stripped = seg.strip()
+                if "python" in stripped.lower():
+                    cmd = stripped
+                    break
+            break
+
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        parts = cmd.split()
+
+    # Skip env vars, find python executable, then look for a .py arg
+    python_found = False
+    for part in parts:
+        if not python_found:
+            if "python" in part.lower():
+                python_found = True
+            continue
+        # Skip flags
+        if part.startswith("-"):
+            # -m means module mode — not a script
+            if part == "-m":
+                return None
+            continue
+        # First positional arg after python — should be the script
+        if part.endswith(".py"):
+            return part
+        break
+    return None
+
+
+def _analyze_eval_dependencies(
+    eval_command: str, repo_path: Path,
+) -> tuple[str | None, list[str], list[str]]:
+    """Analyze which repo files the eval entry point imports from.
+
+    Returns (entry_point_name, imported_repo_files, all_repo_py_files).
+    ``imported_repo_files`` lists repo-relative paths of Python files that
+    the eval entry point directly imports.  If the entry point cannot be
+    found or parsed, returns (None, [], all_files).
+    """
+    import ast as _ast
+
+    script_name = _find_eval_entry_script(eval_command)
+    if script_name is None:
+        return None, [], []
+
+    entry_path = repo_path / script_name
+    if not entry_path.is_file():
+        return script_name, [], []
+
+    try:
+        source = entry_path.read_text(encoding="utf-8")
+        tree = _ast.parse(source, filename=script_name)
+    except (SyntaxError, OSError):
+        return script_name, [], []
+
+    # Collect all top-level module names from import statements
+    imported_modules: set[str] = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                imported_modules.add(alias.name.split(".")[0])
+        elif isinstance(node, _ast.ImportFrom):
+            if node.module:
+                imported_modules.add(node.module.split(".")[0])
+
+    # Check which imported module names correspond to repo-local .py files
+    # or packages (directories with __init__.py)
+    imported_repo_files: list[str] = []
+    for mod_name in sorted(imported_modules):
+        # Check for module_name.py
+        candidate = repo_path / f"{mod_name}.py"
+        if candidate.is_file():
+            imported_repo_files.append(f"{mod_name}.py")
+            continue
+        # Check for package (dir with __init__.py)
+        pkg_dir = repo_path / mod_name
+        if pkg_dir.is_dir() and (pkg_dir / "__init__.py").exists():
+            imported_repo_files.append(f"{mod_name}/")
+
+    # Gather all repo Python files for comparison
+    all_repo_py: list[str] = []
+    try:
+        all_repo_py = sorted(
+            str(p.relative_to(repo_path))
+            for p in repo_path.rglob("*.py")
+            if ".ahvs" not in p.parts
+            and "__pycache__" not in p.parts
+            and ".git" not in p.parts
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    return script_name, imported_repo_files, all_repo_py
+
+
 def _run_import_sanity_check(
     worktree: "HypothesisWorktree",
     eval_command: str,
@@ -1939,6 +2054,48 @@ def _run_single_hypothesis(
             f"existing source files (listed above) will affect the result.\n"
             f"Standalone scripts you create will NOT be executed.\n\n"
         )
+
+        # Analyze eval entry point dependencies to guide Claude Code
+        entry_name, eval_deps, _all_py = _analyze_eval_dependencies(
+            eval_command, config.repo_path,
+        )
+        if entry_name is not None:
+            if eval_deps:
+                deps_list = ", ".join(f"`{d}`" for d in eval_deps)
+                eval_section += (
+                    f"## Eval Dependency Graph — CRITICAL\n"
+                    f"The eval entry point `{entry_name}` imports from these "
+                    f"repo-local files: {deps_list}.\n"
+                    f"**Only changes to these files (or files they transitively "
+                    f"import) will affect the measured metric.**\n"
+                    f"Changes to other repo files will have NO effect on the "
+                    f"eval result.\n\n"
+                )
+            else:
+                # Self-contained eval — warn prominently
+                eval_section += (
+                    f"## ⚠ EVAL ISOLATION WARNING — READ CAREFULLY ⚠\n"
+                    f"The eval entry point `{entry_name}` does NOT import from "
+                    f"any other repo source files. It is **self-contained** — "
+                    f"it has its own training loop, model setup, and evaluation "
+                    f"logic.\n\n"
+                    f"**This means changes to other Python files in this repo "
+                    f"(e.g. `Train_model.py`) will have ZERO effect on the "
+                    f"measured metric.**\n\n"
+                    f"Since `{entry_name}` is a protected file (blocked from "
+                    f"modification), you must implement your hypothesis changes "
+                    f"as a NEW importable module and modify the eval's shared "
+                    f"dependencies. If no shared dependencies exist, document "
+                    f"exactly what parameters/code in `{entry_name}` would need "
+                    f"to change and output those changes — the framework may "
+                    f"selectively apply them.\n\n"
+                )
+                logger.warning(
+                    "Eval entry point %s is self-contained (no repo-local "
+                    "imports). Hypotheses modifying other repo files will not "
+                    "affect the metric. This is likely a dead-end configuration.",
+                    entry_name,
+                )
     problem = (
         f"# AHVS Hypothesis Execution\n\n"
         f"## Hypothesis {hyp_id}\n"
