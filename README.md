@@ -631,31 +631,60 @@ skills:
 
 ## 10. Cross-Cycle Memory
 
-AHVS uses the `EvolutionStore` to persist lessons across cycles. This means:
+> **Full reference:** [docs/memory_management_system.md](docs/memory_management_system.md) covers the complete memory architecture including the LessonEntry schema, all weight boosts, compaction algorithms, and configuration reference.
+
+AHVS uses a **three-tier memory model** to persist and leverage lessons across cycles:
+
+| Tier | Location | Purpose |
+|------|----------|---------|
+| **Evolution Store** | `<repo>/.ahvs/evolution/lessons.jsonl` | Machine-queryable lessons fed into hypothesis generation |
+| **Friction Logs** | `<repo>/.ahvs/cycles/<id>/friction_log.md` | Per-cycle execution errors and operator notes |
+| **Session Memory** | `<repo>/.ahvs/memory/` | Human-readable cross-session summaries |
+
+All memory lives in the **target repository**, making it portable across machines.
+
+### How lessons are recorded
 
 - **Successful hypotheses** are recorded as positive lessons — future cycles know what worked
 - **Failed attempts** (measured but not improved) are marked as rejected approaches — the LLM is explicitly told not to repeat them
 - **Infrastructure failures** (`extraction_failed`, `sandbox_error`) are recorded as warnings noting the hypothesis was never actually measured — they do *not* count as rejected approaches, so the idea can be retried in future cycles
 - **Errors** during execution are logged as warnings with enough context to diagnose
 
-The EvolutionStore lives at `<repo>/.ahvs/evolution/`. It is managed automatically — stale entries are compacted and failed cycle directories are cleaned up at the start of each new cycle.
+Each lesson carries **structured outcome fields** (`hypothesis_type`, `metric_name`, `metric_delta`, `eval_method`, etc.) alongside the description text. These enable quantitative analysis, semantic deduplication, and cross-project learning while remaining backward-compatible with older JSONL entries.
+
+### Eager writes and crash safety
+
+Each hypothesis result is written to `lessons.jsonl` immediately after measurement (Stage 6), with `cycle_status="partial"`. This ensures lessons survive even if the cycle crashes before Stage 7. When Stage 7 runs successfully, it writes the same lessons with `cycle_status="complete"`. The next compaction pass deduplicates and upgrades partial entries to complete.
 
 ### Memory management
 
-Each lesson carries a `cycle_status` field (`"complete"`, `"partial"`, or `"failed"`). When querying lessons for hypothesis generation, AHVS **filters out failed cycles** — only lessons with status `"complete"` or `"partial"` (eager writes) are included. This prevents noise from infrastructure crashes (which never tested any hypothesis) from polluting future hypothesis generation, while preserving results from partial runs where hypotheses were actually measured.
+The `--max-lesson-cycles K` flag (default: 5) caps how many recent complete cycles feed into hypothesis generation. Set to 0 for unlimited (time-decay with 30-day half-life still applies; lessons older than 90 days are expired).
 
-The `--max-lesson-cycles K` flag (default: 5) caps how many recent complete cycles feed into hypothesis generation. With K=5 and 3 hypotheses per cycle, the LLM sees at most ~15 recent lessons instead of an unbounded history. Set to 0 for unlimited (time-decay still applies).
+**Automatic housekeeping** runs at the start of every new cycle:
 
-**Eager lesson writes** — Each hypothesis result is written to `lessons.jsonl` immediately after measurement (Stage 6), with `cycle_status="partial"`. This ensures lessons survive even if the cycle crashes before Stage 7. When Stage 7 runs successfully, it writes the same lessons with `cycle_status="complete"`. The next compaction pass deduplicates and upgrades partial entries to complete.
+1. **Cycle directory cleanup** — Removes stale dirs (stage-1 failures, orphans, partial cycles, old complete cycles beyond the 3-cycle retention window)
+2. **Lesson compaction** — Two-phase deduplication:
+   - *Exact dedup:* Collapses partial/complete pairs within a cycle (keeps complete)
+   - *Semantic dedup:* Collapses paraphrased lessons across cycles using a fingerprint of `(hypothesis_type, metric_name, rounded delta)`. Keeps the best entry per group (highest severity, most recent, most structured data)
+3. **Friction log summarization** — Extracts recurring error patterns and operator notes from retained friction logs, writes a consolidated `friction_summary.md`
+4. **Memory file lifecycle** — Marks files in `.ahvs/memory/` older than 60 days as `[STALE]`; archives files older than 120 days to `memory/archive/`
 
-**Automatic cleanup** runs at the start of every new cycle:
+### Verification feedback
 
-1. **Cycle directory cleanup** — Removes four categories of stale dirs:
-   - Stage-1 failures (setup crashes, no artifacts)
-   - Orphan dirs (no checkpoint file — manual test dirs, etc.)
-   - Partial cycles (reached execution but never completed Stage 8 — hypothesis results are already in `lessons.jsonl` via eager writes)
-   - Old complete cycles beyond the retention window (keeps the 3 most recent complete cycles for auditing)
-2. **Lesson compaction** — Expired entries (>90 days old, past the time-decay cutoff) and duplicates are removed from `lessons.jsonl`. When both a partial and complete entry exist for the same lesson, the complete entry is kept.
+After Stage 8 determines which hypothesis to keep or revert, it **feeds that decision back** into the evolution store. Lessons from the kept hypothesis are marked `verified="kept"` (1.5x weight boost in future queries); all others are marked `verified="reverted"` (0.5x penalty). This creates a closed feedback loop where proven improvements carry more weight.
+
+### Historical digest
+
+Beyond the 12 raw recent lessons, AHVS builds a **historical digest** — aggregated statistics from older cycles grouped by hypothesis type (total attempts, improvement rate, average/best delta, kept/reverted counts). This compact summary is injected into the hypothesis generation prompt, allowing the LLM to reason about long-term patterns without consuming raw lesson context slots.
+
+### Cross-project learning
+
+A **GlobalEvolutionStore** at `~/.ahvs/global/evolution/` enables framework-level insights to transfer across repos. At the end of each successful cycle, qualifying lessons are promoted to the global store:
+
+- **SYSTEM** and **PIPELINE** category lessons (infrastructure issues, not repo-specific)
+- **Verified-kept** lessons (proven improvements, transferable patterns)
+
+During Stage 2, up to 3 global lessons (excluding the current repo) are merged into the context bundle. This can be disabled with `enable_cross_project=False`.
 
 At Stage 2 (`AHVS_CONTEXT_LOAD`), AHVS queries the top 12 lessons from the store using the stage name `"ahvs_execution"` — the same name used when writing lessons at Stage 7. This ensures the EvolutionStore's 2x relevance boost applies correctly to AHVS-specific lessons. Lessons with severity `"info"` are treated as positive outcomes; those with `"warning"` or `"error"` are surfaced as rejected approaches. The LLM sees both what has worked and what has been ruled out, producing increasingly targeted hypotheses over time.
 

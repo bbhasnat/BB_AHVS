@@ -72,6 +72,7 @@ _AHVS_STAGES: dict[str, dict[str, Any]] = {
             "## Operator Context\n{enriched_context}\n\n"
             "## Prior Lessons (from previous cycles)\n{prior_lessons}\n\n"
             "## Rejected Approaches (do not repeat these)\n{rejected_approaches}\n\n"
+            "## Historical Performance Digest (older cycles)\n{historical_digest}\n\n"
             "---\n\n"
             "Generate {max_hypotheses} concrete hypotheses to address the cycle question. "
             "Each hypothesis must:\n"

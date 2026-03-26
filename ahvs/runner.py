@@ -108,6 +108,22 @@ def execute_ahvs_cycle(
                 compacted = store.compact()
                 if compacted:
                     print(f"[AHVS] Compacted evolution store: removed {compacted} stale entries")
+
+            # Summarize friction logs from retained cycles
+            processed = EvolutionStore.compact_friction_logs(cycles_root)
+            if processed:
+                print(f"[AHVS] Summarized {processed} friction logs")
+
+            # Manage memory file lifecycle (stale/archive)
+            memory_dir = config.repo_path / ".ahvs" / "memory"
+            if memory_dir.is_dir():
+                stale, archived = EvolutionStore.compact_memory_files(
+                    memory_dir,
+                    stale_days=config.memory_stale_days,
+                    archive_days=config.memory_archive_days,
+                )
+                if stale or archived:
+                    print(f"[AHVS] Memory lifecycle: {stale} stale-marked, {archived} archived")
         except Exception:  # noqa: BLE001
             pass  # Non-fatal — don't block the cycle for cleanup issues
 
@@ -199,5 +215,18 @@ def execute_ahvs_cycle(
               else f"[AHVS] Stopped at {until_stage.name} as requested.")
     elif done_count == len(AHVS_STAGE_SEQUENCE):
         print(f"[AHVS] Full cycle complete. See: {cycle_dir / 'cycle_summary.json'}")
+
+    # Promote qualifying lessons to global cross-project store
+    if config.enable_cross_project and done_count == len(stages_to_run):
+        try:
+            from ahvs.evolution import GlobalEvolutionStore, EvolutionStore
+
+            global_store = GlobalEvolutionStore(config.global_evolution_dir)
+            local_store = EvolutionStore(config.evolution_dir)
+            promoted = global_store.promote_lessons(local_store, config.repo_path.name)
+            if promoted:
+                print(f"[AHVS] Promoted {promoted} lesson(s) to global store")
+        except Exception:  # noqa: BLE001
+            pass
 
     return results

@@ -593,6 +593,82 @@ class EvolutionStore:
 
         return "\n".join(parts)
 
+    def build_historical_digest(
+        self,
+        *,
+        exclude_recent_cycles: int = 5,
+        max_type_groups: int = 6,
+    ) -> dict:
+        """Build a structured digest of historical lessons beyond recent cycles.
+
+        Loads all lessons, excludes the most recent *exclude_recent_cycles*
+        cycle IDs (those are surfaced as raw ``prior_lessons``), and
+        aggregates the remainder by ``hypothesis_type``.
+
+        Returns a dict with per-type statistics and totals.  Gracefully
+        degrades for legacy entries without structured fields (count-only).
+        """
+        all_lessons = self.load_all()
+        if not all_lessons:
+            return {}
+
+        # Determine cycle IDs to exclude
+        cycle_ids = sorted(
+            {l.run_id for l in all_lessons if l.run_id},
+            reverse=True,
+        )
+        recent_ids = set(cycle_ids[:exclude_recent_cycles])
+
+        # Filter to older lessons only
+        older = [
+            l for l in all_lessons
+            if l.run_id not in recent_ids
+            and l.cycle_status != "failed"
+        ]
+        if not older:
+            return {}
+
+        # Group by hypothesis_type (or "unknown" for legacy)
+        from collections import defaultdict
+        by_type: dict[str, list[LessonEntry]] = defaultdict(list)
+        for l in older:
+            htype = l.hypothesis_type or "unknown"
+            by_type[htype].append(l)
+
+        # Build per-type stats
+        type_stats = {}
+        for htype, entries in sorted(
+            by_type.items(),
+            key=lambda x: -len(x[1]),  # most common first
+        )[:max_type_groups]:
+            total = len(entries)
+            with_delta = [e for e in entries if e.metric_delta is not None]
+            improved = [e for e in with_delta if e.metric_delta > 0]
+            kept = [e for e in entries if e.verified == "kept"]
+            reverted = [e for e in entries if e.verified == "reverted"]
+
+            stats: dict = {"total": total}
+            if with_delta:
+                stats["improved"] = len(improved)
+                deltas = [e.metric_delta for e in with_delta]
+                stats["avg_delta"] = round(sum(deltas) / len(deltas), 4)
+                stats["best_delta"] = round(max(deltas), 4)
+            if kept:
+                stats["kept_count"] = len(kept)
+            if reverted:
+                stats["reverted_count"] = len(reverted)
+            # Pick a representative description
+            best_entry = max(entries, key=lambda e: e.metric_delta or 0.0)
+            stats["representative"] = best_entry.description[:200]
+            type_stats[htype] = stats
+
+        return {
+            "by_hypothesis_type": type_stats,
+            "total_lessons": len(older),
+            "total_cycles": len(cycle_ids) - len(recent_ids),
+            "oldest_lesson": min(l.timestamp for l in older) if older else "",
+        }
+
     def compact(self) -> int:
         """Remove expired (>90 days) and duplicate lessons.
 
@@ -745,6 +821,254 @@ class EvolutionStore:
             )
         return removed
 
+    @staticmethod
+    def compact_friction_logs(
+        cycles_dir: Path,
+        *,
+        summary_path: Path | None = None,
+    ) -> int:
+        """Summarize friction logs from retained cycle dirs into a single digest.
+
+        Reads all ``friction_log.md`` files, extracts error patterns and
+        operator notes, deduplicates recurring themes, and writes
+        ``friction_summary.md`` to *summary_path* (defaults to
+        ``<cycles_dir>/../evolution/friction_summary.md``).
+
+        Returns number of friction logs processed.
+        """
+        if not cycles_dir.is_dir():
+            return 0
+
+        if summary_path is None:
+            summary_path = cycles_dir.parent / "evolution" / "friction_summary.md"
+
+        errors: list[str] = []
+        notes: list[str] = []
+        processed = 0
+
+        for cycle_dir in sorted(cycles_dir.iterdir()):
+            flog = cycle_dir / "friction_log.md"
+            if not flog.is_file():
+                continue
+            try:
+                text = flog.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            processed += 1
+
+            # Extract sections
+            section = ""
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("## Execution Errors"):
+                    section = "errors"
+                elif stripped.startswith("## Measurement Issues"):
+                    section = "measurement"
+                elif stripped.startswith("## Operator Notes"):
+                    section = "notes"
+                elif stripped.startswith("## "):
+                    section = ""
+                elif stripped.startswith("- ") and section in ("errors", "measurement"):
+                    errors.append(stripped)
+                elif stripped and section == "notes" and not stripped.startswith("<!--"):
+                    notes.append(stripped)
+
+        if processed == 0:
+            return 0
+
+        # Deduplicate error patterns (normalize by removing hypothesis IDs)
+        seen_errors: dict[str, str] = {}
+        for err in errors:
+            key = _re.sub(r"\bH\d+\b", "H?", err).lower()
+            if key not in seen_errors:
+                seen_errors[key] = err
+
+        unique_notes = list(dict.fromkeys(notes))  # preserve order, dedup
+
+        parts = ["# Friction Summary\n"]
+        parts.append(f"_Generated from {processed} cycle friction logs._\n")
+        if seen_errors:
+            parts.append("\n## Recurring Errors\n")
+            for err in seen_errors.values():
+                parts.append(err)
+        if unique_notes:
+            parts.append("\n## Operator Notes\n")
+            for note in unique_notes:
+                parts.append(note)
+
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text("\n".join(parts) + "\n", encoding="utf-8")
+        logger.info("Wrote friction summary from %d logs", processed)
+        return processed
+
+    @staticmethod
+    def compact_memory_files(
+        memory_dir: Path,
+        *,
+        stale_days: int = 60,
+        archive_days: int = 120,
+    ) -> tuple:
+        """Manage lifecycle of session memory files.
+
+        - Files older than *stale_days*: prepend ``> [STALE]`` marker
+          (idempotent — skips files already marked).
+        - Files older than *archive_days*: move to ``memory/archive/``.
+
+        Returns ``(stale_count, archived_count)``.
+        """
+        import shutil
+
+        if not memory_dir.is_dir():
+            return (0, 0)
+
+        now = datetime.now(timezone.utc)
+        stale_count = 0
+        archived_count = 0
+        archive_dir = memory_dir / "archive"
+
+        for fpath in sorted(memory_dir.iterdir()):
+            if not fpath.is_file() or fpath.suffix != ".md":
+                continue
+
+            try:
+                mtime = datetime.fromtimestamp(fpath.stat().st_mtime, tz=timezone.utc)
+            except OSError:
+                continue
+            age_days = (now - mtime).total_seconds() / 86400.0
+
+            if age_days >= archive_days:
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(fpath), str(archive_dir / fpath.name))
+                archived_count += 1
+            elif age_days >= stale_days:
+                try:
+                    content = fpath.read_text(encoding="utf-8")
+                    if not content.startswith("> [STALE]"):
+                        fpath.write_text(
+                            "> [STALE] This memory file is over "
+                            f"{stale_days} days old and may be outdated.\n\n"
+                            + content,
+                            encoding="utf-8",
+                        )
+                        stale_count += 1
+                except OSError:
+                    continue
+
+        if stale_count or archived_count:
+            logger.info(
+                "Memory lifecycle: %d stale-marked, %d archived",
+                stale_count, archived_count,
+            )
+        return (stale_count, archived_count)
+
     def count(self) -> int:
         """Return total number of stored lessons."""
         return len(self.load_all())
+
+
+# ---------------------------------------------------------------------------
+# Global (cross-project) evolution store
+# ---------------------------------------------------------------------------
+
+_PROMOTABLE_CATEGORIES = frozenset({
+    LessonCategory.SYSTEM,
+    LessonCategory.PIPELINE,
+})
+
+
+def _is_promotable(lesson: LessonEntry) -> bool:
+    """Check if a lesson qualifies for cross-project promotion.
+
+    Qualifying criteria:
+    - Category is SYSTEM or PIPELINE (framework-level, not repo-specific), OR
+    - Verified as "kept" (proven improvement, transferable pattern).
+    """
+    if lesson.category in _PROMOTABLE_CATEGORIES:
+        return True
+    if lesson.verified == "kept":
+        return True
+    return False
+
+
+class GlobalEvolutionStore(EvolutionStore):
+    """Cross-project lesson store at ``~/.ahvs/global/evolution/``.
+
+    Lessons promoted here are tagged with ``source_repo`` for provenance.
+    Only framework-level lessons (SYSTEM, PIPELINE) and verified-kept
+    lessons qualify for promotion.
+    """
+
+    def promote_lessons(
+        self,
+        local_store: EvolutionStore,
+        repo_name: str,
+    ) -> int:
+        """Copy qualifying lessons from a local store to global.
+
+        Tags promoted lessons with ``source_repo``.  Deduplicates by
+        semantic fingerprint to avoid re-promoting the same insight.
+
+        Returns count of lessons promoted.
+        """
+        local_lessons = local_store.load_all()
+        candidates = [l for l in local_lessons if _is_promotable(l)]
+        if not candidates:
+            return 0
+
+        # Load existing global fingerprints for dedup
+        existing = self.load_all()
+        existing_fps = {_semantic_fingerprint(l) for l in existing}
+
+        promoted = 0
+        for lesson in candidates:
+            fp = _semantic_fingerprint(lesson)
+            if fp in existing_fps:
+                continue
+            # Tag with source repo
+            lesson.source_repo = repo_name
+            self.append(lesson)
+            existing_fps.add(fp)
+            promoted += 1
+
+        if promoted:
+            logger.info(
+                "Promoted %d lessons to global store from %s",
+                promoted, repo_name,
+            )
+        return promoted
+
+    def query_cross_project(
+        self,
+        stage_name: str,
+        *,
+        max_lessons: int = 3,
+        exclude_repo: str = "",
+    ) -> list:
+        """Query global lessons, optionally excluding the current repo.
+
+        Uses the same time-decay weighting as the parent class but
+        filters out lessons from ``exclude_repo`` to avoid self-reinforcement.
+        """
+        all_lessons = self.load_all()
+        if exclude_repo:
+            all_lessons = [
+                l for l in all_lessons if l.source_repo != exclude_repo
+            ]
+
+        scored = []
+        for lesson in all_lessons:
+            if lesson.cycle_status == "failed":
+                continue
+            weight = _time_weight(lesson.timestamp)
+            if weight <= 0.0:
+                continue
+            if lesson.stage_name == stage_name:
+                weight *= 2.0
+            if lesson.severity == "error":
+                weight *= 1.5
+            if lesson.verified == "kept":
+                weight *= 1.5
+            scored.append((weight, lesson))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [entry for _, entry in scored[:max_lessons]]

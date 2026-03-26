@@ -134,17 +134,23 @@ def load_context_bundle(
     evolution_dir: Path,
     baseline_path: Path,
     max_lesson_cycles: int = 5,
+    global_evolution_dir: Path | None = None,
+    enable_cross_project: bool = True,
 ) -> dict:
     """Build the context_bundle.json payload.
 
     Combines:
     - baseline metric (from .ahvs/baseline_metric.json)
     - cross-cycle memory (from EvolutionStore)
+    - cross-project memory (from GlobalEvolutionStore, if enabled)
     - domain tags (inferred from repo dependencies)
 
     Args:
         max_lesson_cycles: Only include lessons from the last K complete
             cycles.  0 = unlimited (time-decay still applies).
+        global_evolution_dir: Path to global evolution store for cross-project
+            lessons.  Defaults to None (no cross-project query).
+        enable_cross_project: Whether to include cross-project lessons.
     """
     baseline = load_baseline_metric(baseline_path)
 
@@ -166,6 +172,30 @@ def load_context_bundle(
         except Exception:  # noqa: BLE001
             pass  # Non-fatal — first cycle has no history
 
+    # Merge cross-project lessons (global store)
+    global_lessons: list[LessonEntry] = []
+    if (
+        enable_cross_project
+        and global_evolution_dir is not None
+        and global_evolution_dir.exists()
+    ):
+        try:
+            from ahvs.evolution import GlobalEvolutionStore
+            global_store = GlobalEvolutionStore(global_evolution_dir)
+            global_lessons = global_store.query_cross_project(
+                "ahvs_execution",
+                max_lessons=3,
+                exclude_repo=repo_path.name,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Merge: local lessons take priority, global fill remaining
+    local_descs = {l.description for l in lessons}
+    for gl in global_lessons:
+        if gl.description not in local_descs:
+            lessons.append(gl)
+
     metric_key = baseline["primary_metric"]
 
     # Forward enriched onboarding fields from baseline_metric.json.
@@ -183,6 +213,17 @@ def load_context_bundle(
         if field in baseline and baseline[field] is not None:
             enriched_fields[field] = baseline[field]
 
+    # Build historical digest for older lessons beyond the recent window
+    historical_digest = {}
+    if evolution_dir.exists():
+        try:
+            store = EvolutionStore(evolution_dir)
+            historical_digest = store.build_historical_digest(
+                exclude_recent_cycles=max_lesson_cycles,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
     return {
         "question": question,
         "baseline": {
@@ -195,6 +236,7 @@ def load_context_bundle(
         "enriched_context": enriched_fields,
         "prior_lessons": _extract_prior_lessons(lessons),
         "rejected_approaches": _extract_rejected_approaches(lessons),
+        "historical_digest": historical_digest,
         "domain_tags": _infer_domain_tags(repo_path),
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }

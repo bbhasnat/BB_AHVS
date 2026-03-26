@@ -44,6 +44,14 @@ class AHVSConfig:
     llm_model: str = "claude-opus-4-6"
     llm_api_key_env: str = "ANTHROPIC_API_KEY"
 
+    # ── Memory lifecycle ──────────────────────────────────────────────
+    memory_stale_days: int = 60      # prepend [STALE] marker to old memory files
+    memory_archive_days: int = 120   # move very old memory files to archive/
+
+    # ── Cross-project learning ─────────────────────────────────────────
+    enable_cross_project: bool = True
+    global_evolution_dir: Path = field(default=None)  # type: ignore[assignment]
+
     # ── ACP settings (only used when llm_provider == "acp") ───────────
     acp_agent: str = "claude"
     acp_cwd: str = "."           # resolved to repo_path in __post_init__
@@ -65,6 +73,10 @@ class AHVSConfig:
             raise ValueError("max_hypotheses cannot exceed 5 (AHVS hard cap)")
         if self.max_hypotheses < 1:
             raise ValueError("max_hypotheses must be at least 1")
+        if self.global_evolution_dir is None:
+            self.global_evolution_dir = Path.home() / ".ahvs" / "global" / "evolution"
+        else:
+            self.global_evolution_dir = Path(self.global_evolution_dir).resolve()
 
     # ── Derived paths ─────────────────────────────────────────────────────
 

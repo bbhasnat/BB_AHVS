@@ -49,6 +49,31 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _format_historical_digest(digest: dict) -> str:
+    """Format a historical digest dict into compact prompt-friendly text."""
+    if not digest or not digest.get("by_hypothesis_type"):
+        return "No historical data available yet."
+
+    lines = [
+        f"Aggregated from {digest.get('total_lessons', 0)} lessons "
+        f"across {digest.get('total_cycles', 0)} older cycles:"
+    ]
+    for htype, stats in digest["by_hypothesis_type"].items():
+        improved = stats.get("improved", 0)
+        total = stats.get("total", 0)
+        parts = [f"**{htype}**: {total} attempts"]
+        if "improved" in stats:
+            parts.append(f"{improved}/{total} improved")
+        if "avg_delta" in stats:
+            parts.append(f"avg Δ{stats['avg_delta']:+.4f}")
+        if "best_delta" in stats:
+            parts.append(f"best Δ{stats['best_delta']:+.4f}")
+        if "kept_count" in stats:
+            parts.append(f"{stats['kept_count']} kept")
+        lines.append("- " + ", ".join(parts))
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # LLM client factory
 # ---------------------------------------------------------------------------
@@ -1278,6 +1303,9 @@ def _execute_hypothesis_gen(
         "\n".join(f"- {r}" for r in bundle.get("rejected_approaches", []))
         or "None recorded yet."
     )
+    historical_digest_text = _format_historical_digest(
+        bundle.get("historical_digest", {})
+    )
     domain_tags_text = ", ".join(bundle.get("domain_tags", ["general"]))
 
     # Format enriched onboarding context for the prompt
@@ -1307,6 +1335,7 @@ def _execute_hypothesis_gen(
         enriched_context=enriched_context_text,
         prior_lessons=prior_lessons_text,
         rejected_approaches=rejected_text,
+        historical_digest=historical_digest_text,
         max_hypotheses=str(config.max_hypotheses),
     )
 

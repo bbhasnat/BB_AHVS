@@ -4089,3 +4089,466 @@ class TestVerificationFeedback:
 
         # Should not crash, store still empty
         assert store.count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Friction Log & Memory Compaction
+# ---------------------------------------------------------------------------
+
+
+class TestFrictionLogCompaction:
+    """Tests for compact_friction_logs (Gap 2)."""
+
+    def test_summarizes_multiple_friction_logs(self, tmp_path):
+        """Produces a summary from multiple friction logs."""
+        from ahvs.evolution import EvolutionStore
+
+        cycles = tmp_path / "cycles"
+        for i in range(3):
+            d = cycles / f"cycle_{i}"
+            d.mkdir(parents=True)
+            (d / "friction_log.md").write_text(
+                "# Friction Log\n\n"
+                "## Execution Errors (auto-generated)\n\n"
+                f"- H{i+1}: timeout after 300s\n\n"
+                "## Measurement Issues (auto-generated)\n\n"
+                "No measurement issues.\n\n"
+                "## Operator Notes\n\n"
+                "Eval is slow on large datasets.\n"
+            )
+
+        result = EvolutionStore.compact_friction_logs(cycles)
+        assert result == 3
+        summary = (cycles.parent / "evolution" / "friction_summary.md")
+        assert summary.exists()
+        content = summary.read_text()
+        assert "Recurring Errors" in content
+        assert "timeout" in content
+        assert "Operator Notes" in content
+
+    def test_deduplicates_similar_errors(self, tmp_path):
+        """Similar errors from different hypotheses are deduplicated."""
+        from ahvs.evolution import EvolutionStore
+
+        cycles = tmp_path / "cycles"
+        for i in range(2):
+            d = cycles / f"cycle_{i}"
+            d.mkdir(parents=True)
+            (d / "friction_log.md").write_text(
+                "## Execution Errors (auto-generated)\n\n"
+                f"- H{i+1}: ImportError: no module named 'foo'\n\n"
+                "## Measurement Issues (auto-generated)\n\n"
+                "## Operator Notes\n\n"
+            )
+
+        EvolutionStore.compact_friction_logs(cycles)
+        content = (cycles.parent / "evolution" / "friction_summary.md").read_text()
+        # The error should appear only once (deduplicated by normalizing H?)
+        assert content.count("ImportError") == 1
+
+    def test_no_friction_logs_returns_zero(self, tmp_path):
+        """Returns 0 and writes no summary when no friction logs exist."""
+        from ahvs.evolution import EvolutionStore
+
+        cycles = tmp_path / "cycles"
+        cycles.mkdir()
+        result = EvolutionStore.compact_friction_logs(cycles)
+        assert result == 0
+        assert not (cycles.parent / "evolution" / "friction_summary.md").exists()
+
+    def test_nonexistent_dir(self, tmp_path):
+        """Returns 0 for nonexistent cycles dir."""
+        from ahvs.evolution import EvolutionStore
+        assert EvolutionStore.compact_friction_logs(tmp_path / "nope") == 0
+
+
+class TestMemoryFileCompaction:
+    """Tests for compact_memory_files (Gap 2)."""
+
+    def test_marks_old_files_stale(self, tmp_path):
+        """Files older than stale_days get a [STALE] marker."""
+        import time
+        from ahvs.evolution import EvolutionStore
+
+        mem_dir = tmp_path / "memory"
+        mem_dir.mkdir()
+        f = mem_dir / "old_note.md"
+        f.write_text("Some old note")
+        # Backdate the file
+        old_time = time.time() - (65 * 86400)
+        os.utime(str(f), (old_time, old_time))
+
+        stale, archived = EvolutionStore.compact_memory_files(mem_dir, stale_days=60)
+        assert stale == 1
+        assert archived == 0
+        content = f.read_text()
+        assert content.startswith("> [STALE]")
+        assert "Some old note" in content
+
+    def test_stale_marking_is_idempotent(self, tmp_path):
+        """Running twice doesn't double-mark."""
+        import time
+        from ahvs.evolution import EvolutionStore
+
+        mem_dir = tmp_path / "memory"
+        mem_dir.mkdir()
+        f = mem_dir / "note.md"
+        f.write_text("Note")
+        old_time = time.time() - (65 * 86400)
+        os.utime(str(f), (old_time, old_time))
+
+        EvolutionStore.compact_memory_files(mem_dir, stale_days=60)
+        stale2, _ = EvolutionStore.compact_memory_files(mem_dir, stale_days=60)
+        assert stale2 == 0  # already marked
+
+    def test_archives_very_old_files(self, tmp_path):
+        """Files older than archive_days are moved to archive/."""
+        import time
+        from ahvs.evolution import EvolutionStore
+
+        mem_dir = tmp_path / "memory"
+        mem_dir.mkdir()
+        f = mem_dir / "ancient.md"
+        f.write_text("Ancient note")
+        old_time = time.time() - (130 * 86400)
+        os.utime(str(f), (old_time, old_time))
+
+        stale, archived = EvolutionStore.compact_memory_files(
+            mem_dir, stale_days=60, archive_days=120,
+        )
+        assert archived == 1
+        assert not f.exists()
+        assert (mem_dir / "archive" / "ancient.md").exists()
+
+    def test_recent_files_untouched(self, tmp_path):
+        """Recent files are not modified."""
+        from ahvs.evolution import EvolutionStore
+
+        mem_dir = tmp_path / "memory"
+        mem_dir.mkdir()
+        f = mem_dir / "recent.md"
+        f.write_text("Recent note")
+
+        stale, archived = EvolutionStore.compact_memory_files(mem_dir, stale_days=60)
+        assert stale == 0
+        assert archived == 0
+        assert f.read_text() == "Recent note"
+
+    def test_empty_dir(self, tmp_path):
+        """Empty memory dir is handled gracefully."""
+        from ahvs.evolution import EvolutionStore
+        mem_dir = tmp_path / "memory"
+        mem_dir.mkdir()
+        stale, archived = EvolutionStore.compact_memory_files(mem_dir)
+        assert stale == 0
+        assert archived == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Context Window Expansion (Historical Digest)
+# ---------------------------------------------------------------------------
+
+
+class TestHistoricalDigest:
+    """Tests for build_historical_digest and context_bundle integration (Gap 5)."""
+
+    def test_digest_with_many_cycles(self, tmp_path):
+        """Digest aggregates older lessons beyond the recent window."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        store = EvolutionStore(tmp_path / "evolution")
+        now = datetime.now(timezone.utc).isoformat()
+
+        # 10 cycles of lessons
+        for i in range(10):
+            store.append(LessonEntry(
+                stage_name="ahvs_execution", stage_num=6, category="experiment",
+                severity="info",
+                description=f"H1 prompt_rewrite improved answer_relevance",
+                timestamp=now, run_id=f"cycle_{i:02d}", cycle_status="complete",
+                hypothesis_type="prompt_rewrite", metric_name="answer_relevance",
+                metric_delta=0.03 + i * 0.001,
+            ))
+
+        digest = store.build_historical_digest(exclude_recent_cycles=5)
+        assert digest["total_cycles"] == 5
+        assert digest["total_lessons"] == 5
+        assert "prompt_rewrite" in digest["by_hypothesis_type"]
+        stats = digest["by_hypothesis_type"]["prompt_rewrite"]
+        assert stats["total"] == 5
+        assert stats["improved"] == 5
+        assert stats["avg_delta"] > 0
+
+    def test_digest_empty_store(self, tmp_path):
+        """Empty store returns empty dict."""
+        from ahvs.evolution import EvolutionStore
+
+        store = EvolutionStore(tmp_path / "evolution")
+        assert store.build_historical_digest() == {}
+
+    def test_digest_only_recent_cycles(self, tmp_path):
+        """All lessons within the recent window → empty digest."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        store = EvolutionStore(tmp_path / "evolution")
+        now = datetime.now(timezone.utc).isoformat()
+
+        for i in range(3):
+            store.append(LessonEntry(
+                stage_name="ahvs_execution", stage_num=6, category="experiment",
+                severity="info", description="lesson",
+                timestamp=now, run_id=f"cycle_{i}", cycle_status="complete",
+                hypothesis_type="prompt_rewrite", metric_name="precision",
+                metric_delta=0.01,
+            ))
+
+        # exclude_recent_cycles=5 but only 3 cycles → nothing historical
+        digest = store.build_historical_digest(exclude_recent_cycles=5)
+        assert digest == {}
+
+    def test_digest_groups_by_type(self, tmp_path):
+        """Different hypothesis types are grouped separately."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        store = EvolutionStore(tmp_path / "evolution")
+        now = datetime.now(timezone.utc).isoformat()
+
+        # 8 cycles, alternating between two types
+        for i in range(8):
+            htype = "prompt_rewrite" if i % 2 == 0 else "code_change"
+            store.append(LessonEntry(
+                stage_name="ahvs_execution", stage_num=6, category="experiment",
+                severity="info", description=f"{htype} result",
+                timestamp=now, run_id=f"cycle_{i:02d}", cycle_status="complete",
+                hypothesis_type=htype, metric_name="recall",
+                metric_delta=0.02 if i % 2 == 0 else -0.01,
+            ))
+
+        digest = store.build_historical_digest(exclude_recent_cycles=2)
+        types = digest["by_hypothesis_type"]
+        assert "prompt_rewrite" in types
+        assert "code_change" in types
+
+    def test_context_bundle_includes_historical_digest(self, tmp_path):
+        """load_context_bundle returns historical_digest key."""
+        from ahvs.context_loader import load_context_bundle
+
+        evo_dir = tmp_path / "evolution"
+        bp = tmp_path / "baseline_metric.json"
+        bp.write_text(json.dumps({
+            "primary_metric": "precision", "precision": 0.85,
+            "recorded_at": "2026-03-26T10:00:00Z",
+            "eval_command": "echo test",
+        }))
+
+        bundle = load_context_bundle(
+            repo_path=tmp_path, question="test",
+            evolution_dir=evo_dir, baseline_path=bp,
+        )
+        assert "historical_digest" in bundle
+
+    def test_format_historical_digest_output(self):
+        """_format_historical_digest produces concise text."""
+        from ahvs.executor import _format_historical_digest
+
+        digest = {
+            "by_hypothesis_type": {
+                "prompt_rewrite": {
+                    "total": 8, "improved": 5,
+                    "avg_delta": 0.025, "best_delta": 0.045,
+                    "kept_count": 3,
+                },
+            },
+            "total_lessons": 8,
+            "total_cycles": 4,
+        }
+        text = _format_historical_digest(digest)
+        assert "prompt_rewrite" in text
+        assert "8 attempts" in text
+        assert "5/8 improved" in text
+
+    def test_format_empty_digest(self):
+        """Empty digest returns a placeholder."""
+        from ahvs.executor import _format_historical_digest
+        text = _format_historical_digest({})
+        assert "No historical data" in text
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: Cross-Project Learning
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalEvolutionStore:
+    """Tests for GlobalEvolutionStore cross-project learning (Gap 6)."""
+
+    def test_promote_system_lessons(self, tmp_path):
+        """SYSTEM and PIPELINE category lessons are promoted."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import (
+            EvolutionStore, GlobalEvolutionStore, LessonEntry, LessonCategory,
+        )
+
+        local_dir = tmp_path / "local" / "evolution"
+        global_dir = tmp_path / "global" / "evolution"
+        local = EvolutionStore(local_dir)
+        gstore = GlobalEvolutionStore(global_dir)
+        now = datetime.now(timezone.utc).isoformat()
+
+        local.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6,
+            category=LessonCategory.SYSTEM, severity="warning",
+            description="Timeout connecting to eval server",
+            timestamp=now, run_id="cycle_1",
+        ))
+        local.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6,
+            category=LessonCategory.EXPERIMENT, severity="info",
+            description="H1 improved precision",
+            timestamp=now, run_id="cycle_1",
+        ))
+
+        promoted = gstore.promote_lessons(local, "myrepo")
+        assert promoted == 1  # only SYSTEM lesson promoted
+        global_lessons = gstore.load_all()
+        assert len(global_lessons) == 1
+        assert global_lessons[0].source_repo == "myrepo"
+        assert global_lessons[0].category == LessonCategory.SYSTEM
+
+    def test_promote_verified_kept_lessons(self, tmp_path):
+        """Verified-kept lessons are promoted regardless of category."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import (
+            EvolutionStore, GlobalEvolutionStore, LessonEntry, LessonCategory,
+        )
+
+        local_dir = tmp_path / "local" / "evolution"
+        global_dir = tmp_path / "global" / "evolution"
+        local = EvolutionStore(local_dir)
+        gstore = GlobalEvolutionStore(global_dir)
+        now = datetime.now(timezone.utc).isoformat()
+
+        local.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6,
+            category=LessonCategory.EXPERIMENT, severity="info",
+            description="H1 prompt_rewrite improved precision",
+            timestamp=now, run_id="cycle_1",
+            hypothesis_type="prompt_rewrite", metric_name="precision",
+            metric_delta=0.04, verified="kept",
+        ))
+
+        promoted = gstore.promote_lessons(local, "myrepo")
+        assert promoted == 1
+
+    def test_dedup_prevents_re_promotion(self, tmp_path):
+        """Calling promote twice doesn't create duplicates."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import (
+            EvolutionStore, GlobalEvolutionStore, LessonEntry, LessonCategory,
+        )
+
+        local_dir = tmp_path / "local" / "evolution"
+        global_dir = tmp_path / "global" / "evolution"
+        local = EvolutionStore(local_dir)
+        gstore = GlobalEvolutionStore(global_dir)
+        now = datetime.now(timezone.utc).isoformat()
+
+        local.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6,
+            category=LessonCategory.SYSTEM, severity="warning",
+            description="Timeout",
+            timestamp=now, run_id="cycle_1",
+        ))
+
+        first = gstore.promote_lessons(local, "myrepo")
+        second = gstore.promote_lessons(local, "myrepo")
+        assert first == 1
+        assert second == 0  # already promoted
+        assert gstore.count() == 1
+
+    def test_query_excludes_current_repo(self, tmp_path):
+        """query_cross_project excludes lessons from the specified repo."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import (
+            GlobalEvolutionStore, LessonEntry, LessonCategory,
+        )
+
+        global_dir = tmp_path / "global" / "evolution"
+        gstore = GlobalEvolutionStore(global_dir)
+        now = datetime.now(timezone.utc).isoformat()
+
+        gstore.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6,
+            category=LessonCategory.SYSTEM, severity="warning",
+            description="Lesson from repo_a",
+            timestamp=now, run_id="cycle_1", source_repo="repo_a",
+        ))
+        gstore.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6,
+            category=LessonCategory.SYSTEM, severity="warning",
+            description="Lesson from repo_b",
+            timestamp=now, run_id="cycle_2", source_repo="repo_b",
+        ))
+
+        results = gstore.query_cross_project(
+            "ahvs_execution", max_lessons=5, exclude_repo="repo_a",
+        )
+        assert len(results) == 1
+        assert results[0].source_repo == "repo_b"
+
+    def test_enable_cross_project_false_skips_global(self, tmp_path):
+        """When enable_cross_project=False, no global interaction."""
+        from ahvs.context_loader import load_context_bundle
+
+        bp = tmp_path / "baseline_metric.json"
+        bp.write_text(json.dumps({
+            "primary_metric": "precision", "precision": 0.85,
+            "recorded_at": "2026-03-26T10:00:00Z",
+            "eval_command": "echo test",
+        }))
+
+        bundle = load_context_bundle(
+            repo_path=tmp_path, question="test",
+            evolution_dir=tmp_path / "evo", baseline_path=bp,
+            enable_cross_project=False,
+            global_evolution_dir=tmp_path / "global" / "evo",
+        )
+        # Should succeed without errors
+        assert "prior_lessons" in bundle
+
+    def test_source_repo_field_backward_compat(self):
+        """LessonEntry without source_repo loads correctly."""
+        from ahvs.evolution import LessonEntry
+        entry = LessonEntry.from_dict({
+            "stage_name": "ahvs_execution", "stage_num": 6,
+            "category": "system", "severity": "warning",
+            "description": "old lesson", "timestamp": "2026-01-01T00:00:00Z",
+        })
+        assert entry.source_repo == ""
+
+    def test_global_store_creates_dir_lazily(self, tmp_path):
+        """Global store creates its directory on first write."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import (
+            EvolutionStore, GlobalEvolutionStore, LessonEntry, LessonCategory,
+        )
+
+        local_dir = tmp_path / "local" / "evolution"
+        global_dir = tmp_path / "nonexistent" / "global" / "evolution"
+        local = EvolutionStore(local_dir)
+        gstore = GlobalEvolutionStore(global_dir)
+        now = datetime.now(timezone.utc).isoformat()
+
+        local.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6,
+            category=LessonCategory.PIPELINE, severity="info",
+            description="Pipeline lesson",
+            timestamp=now, run_id="cycle_1",
+        ))
+
+        promoted = gstore.promote_lessons(local, "myrepo")
+        assert promoted == 1
+        assert global_dir.exists()
