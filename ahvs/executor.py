@@ -1656,15 +1656,57 @@ def _execute_validation_plan(
     skills_block = skill_library.to_context_block(all_applicable_skills) or "No skills available."
 
     baseline = bundle["baseline"]
+
+    # ── Eval dependency analysis for validation plan grounding ─────────
+    # Without this, the LLM generates plans that modify files the eval
+    # never imports (e.g. Train_model.py when run_eval.py is
+    # self-contained), dooming the hypothesis before execution begins.
+    eval_dep_context = ""
+    eval_command = baseline.get("eval_command", "")
+    if eval_command:
+        entry_name, eval_deps, _all_py = _analyze_eval_dependencies(
+            eval_command, config.repo_path,
+        )
+        if entry_name is not None:
+            if eval_deps:
+                deps_list = ", ".join(f"`{d}`" for d in eval_deps)
+                eval_dep_context = (
+                    f"## Eval Dependency Graph — CRITICAL\n"
+                    f"The eval entry point `{entry_name}` imports from "
+                    f"these repo-local files: {deps_list}.\n"
+                    f"**Only changes to these files (or files they "
+                    f"transitively import) will affect the measured "
+                    f"metric.** Plans that modify other files will have "
+                    f"no effect.\n\n"
+                )
+            else:
+                eval_dep_context = (
+                    f"## ⚠ EVAL ISOLATION — CRITICAL FOR PLANNING ⚠\n"
+                    f"The eval entry point `{entry_name}` does NOT "
+                    f"import from any other repo source files. It is "
+                    f"**self-contained** with its own training loop, "
+                    f"model setup, and evaluation logic.\n\n"
+                    f"**Changes to other Python files (e.g. "
+                    f"`Train_model.py`) will have ZERO effect on the "
+                    f"metric.**\n\n"
+                    f"`{entry_name}` is a protected file (blocked from "
+                    f"direct modification). Plans MUST structure changes "
+                    f"as a new importable module that `{entry_name}` "
+                    f"can pick up, or document the exact changes needed "
+                    f"inside `{entry_name}` so the framework can "
+                    f"selectively apply them.\n\n"
+                )
+
     pm = AHVSPromptManager(config.prompts_override_path)
     prompt = pm.for_stage(
         "ahvs_validation_plan",
         question=config.question,
         metric_name=baseline["primary_metric"],
         baseline_value=str(baseline["value"]),
-        eval_command=baseline.get("eval_command", ""),
+        eval_command=eval_command,
         selected_hypotheses_text=selected_text,
         available_skills_block=skills_block,
+        eval_dependency_context=eval_dep_context,
     )
 
     try:
