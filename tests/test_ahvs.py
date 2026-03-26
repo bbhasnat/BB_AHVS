@@ -3937,3 +3937,155 @@ class TestSemanticDedup:
             metric_delta=0.05,
         )
         assert _semantic_fingerprint(e1) != _semantic_fingerprint(e3)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Stage 8 Verification Feedback
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationFeedback:
+    """Tests for Stage 8 keep/revert feedback into lessons (Gap 4)."""
+
+    def test_update_marks_best_as_kept(self, tmp_path):
+        """_update_lesson_verification marks the best hypothesis as 'kept'."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        evo_dir = tmp_path / "evolution"
+        store = EvolutionStore(evo_dir)
+        now = datetime.now(timezone.utc).isoformat()
+        cycle_id = "20260326_120000"
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 improved",
+            timestamp=now, run_id=cycle_id, hypothesis_id="H1",
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H2 did not improve",
+            timestamp=now, run_id=cycle_id, hypothesis_id="H2",
+        ))
+
+        # Simulate config
+        config = type("C", (), {"evolution_dir": evo_dir})()
+        summary = {"best_hypothesis": "H1"}
+        cycle_dir = tmp_path / cycle_id
+        cycle_dir.mkdir()
+
+        from ahvs.executor import _update_lesson_verification
+        _update_lesson_verification(config, cycle_dir, summary)
+
+        lessons = store.load_all()
+        h1 = [l for l in lessons if l.hypothesis_id == "H1"][0]
+        h2 = [l for l in lessons if l.hypothesis_id == "H2"][0]
+        assert h1.verified == "kept"
+        assert h2.verified == "reverted"
+
+    def test_no_best_hypothesis_all_reverted(self, tmp_path):
+        """When best_hypothesis is None, all are marked reverted."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        evo_dir = tmp_path / "evolution"
+        store = EvolutionStore(evo_dir)
+        now = datetime.now(timezone.utc).isoformat()
+        cycle_id = "20260326_120000"
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 did not improve",
+            timestamp=now, run_id=cycle_id, hypothesis_id="H1",
+        ))
+
+        config = type("C", (), {"evolution_dir": evo_dir})()
+        summary = {"best_hypothesis": None}
+        cycle_dir = tmp_path / cycle_id
+        cycle_dir.mkdir()
+
+        from ahvs.executor import _update_lesson_verification
+        _update_lesson_verification(config, cycle_dir, summary)
+
+        lessons = store.load_all()
+        assert lessons[0].verified == "reverted"
+
+    def test_leaves_other_cycles_untouched(self, tmp_path):
+        """Verification only updates lessons from the current cycle."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        evo_dir = tmp_path / "evolution"
+        store = EvolutionStore(evo_dir)
+        now = datetime.now(timezone.utc).isoformat()
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 from old cycle",
+            timestamp=now, run_id="old_cycle", hypothesis_id="H1",
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 from new cycle",
+            timestamp=now, run_id="new_cycle", hypothesis_id="H1",
+        ))
+
+        config = type("C", (), {"evolution_dir": evo_dir})()
+        summary = {"best_hypothesis": "H1"}
+        cycle_dir = tmp_path / "new_cycle"
+        cycle_dir.mkdir()
+
+        from ahvs.executor import _update_lesson_verification
+        _update_lesson_verification(config, cycle_dir, summary)
+
+        lessons = store.load_all()
+        old = [l for l in lessons if l.run_id == "old_cycle"][0]
+        new = [l for l in lessons if l.run_id == "new_cycle"][0]
+        assert old.verified == ""  # untouched
+        assert new.verified == "kept"
+
+    def test_verified_kept_boosts_query_weight(self, tmp_path):
+        """Verified-kept lessons rank higher in query_for_stage."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        store = EvolutionStore(tmp_path / "evolution")
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Reverted lesson — should rank lower
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 reverted lesson",
+            timestamp=now, run_id="cycle_1", hypothesis_id="H1",
+            verified="reverted",
+        ))
+        # Kept lesson — should rank higher
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H2 kept lesson",
+            timestamp=now, run_id="cycle_2", hypothesis_id="H2",
+            verified="kept",
+        ))
+
+        results = store.query_for_stage("ahvs_execution", max_lessons=5)
+        assert len(results) == 2
+        assert results[0].verified == "kept"  # ranked first
+        assert results[1].verified == "reverted"
+
+    def test_noop_when_no_lessons_for_cycle(self, tmp_path):
+        """Verification is a no-op when no matching lessons exist."""
+        from ahvs.evolution import EvolutionStore
+
+        evo_dir = tmp_path / "evolution"
+        store = EvolutionStore(evo_dir)
+        # Empty store
+        config = type("C", (), {"evolution_dir": evo_dir})()
+        summary = {"best_hypothesis": "H1"}
+        cycle_dir = tmp_path / "cycle_1"
+        cycle_dir.mkdir()
+
+        from ahvs.executor import _update_lesson_verification
+        _update_lesson_verification(config, cycle_dir, summary)
+
+        # Should not crash, store still empty
+        assert store.count() == 0

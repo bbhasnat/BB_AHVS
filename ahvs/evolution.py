@@ -525,6 +525,11 @@ class EvolutionStore:
             # Boost errors over warnings/info
             if lesson.severity == "error":
                 weight *= 1.5
+            # Boost/penalize based on verification outcome
+            if lesson.verified == "kept":
+                weight *= 1.5
+            elif lesson.verified == "reverted":
+                weight *= 0.5
             scored.append((weight, lesson))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [entry for _, entry in scored[:max_lessons]]

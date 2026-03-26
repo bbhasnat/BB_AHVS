@@ -2475,6 +2475,52 @@ def _execute_report_and_memory(
     )
 
 
+def _update_lesson_verification(
+    config: AHVSConfig,
+    cycle_dir: Path,
+    summary: dict,
+) -> None:
+    """Update EvolutionStore lessons with keep/revert verification from Stage 8.
+
+    Sets ``verified="kept"`` on the best hypothesis's lessons and
+    ``verified="reverted"`` on all other lessons from this cycle.
+    """
+    from ahvs.evolution import EvolutionStore
+
+    try:
+        store = EvolutionStore(config.evolution_dir)
+        cycle_id = cycle_dir.name
+        best_id = summary.get("best_hypothesis")
+        all_lessons = store.load_all()
+
+        modified = False
+        for lesson in all_lessons:
+            if lesson.run_id != cycle_id:
+                continue
+            if not lesson.hypothesis_id:
+                continue
+            if lesson.hypothesis_id == best_id and best_id is not None:
+                lesson.verified = "kept"
+            else:
+                lesson.verified = "reverted"
+            modified = True
+
+        if modified:
+            store._lessons_path.write_text(
+                "".join(
+                    json.dumps(l.to_dict(), ensure_ascii=False) + "\n"
+                    for l in all_lessons
+                ),
+                encoding="utf-8",
+            )
+            logger.info(
+                "Updated lesson verification for cycle %s (best=%s)",
+                cycle_id, best_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Lesson verification update failed (non-fatal): %s", exc)
+
+
 def _execute_cycle_verify(
     cycle_dir: Path,
     config: AHVSConfig,
@@ -2576,6 +2622,9 @@ def _execute_cycle_verify(
     (cycle_dir / "cycle_summary.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
     )
+
+    # Feed keep/revert decision back into evolution lessons
+    _update_lesson_verification(config, cycle_dir, summary)
 
     print(f"\n[AHVS] Cycle complete — {recommendation}")
 
