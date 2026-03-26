@@ -1596,6 +1596,17 @@ def _write_eager_lesson(
         now = _utcnow_iso()
         metric_name = result.primary_metric
 
+        # Common structured fields for all branches
+        _structured = dict(
+            hypothesis_id=result.hypothesis_id,
+            hypothesis_type=result.hypothesis_type,
+            metric_name=metric_name,
+            metric_baseline=result.baseline_value,
+            metric_after=result.metric_value,
+            metric_delta=result.delta,
+            eval_method=result.eval_method,
+        )
+
         if result.improved:
             lesson = LessonEntry(
                 stage_name="ahvs_execution",
@@ -1610,6 +1621,7 @@ def _write_eager_lesson(
                 timestamp=now,
                 run_id=cycle_id,
                 cycle_status="partial",
+                **_structured,
             )
         elif result.error:
             lesson = LessonEntry(
@@ -1624,6 +1636,7 @@ def _write_eager_lesson(
                 timestamp=now,
                 run_id=cycle_id,
                 cycle_status="partial",
+                **_structured,
             )
         elif result.measurement_status != "measured":
             lesson = LessonEntry(
@@ -1639,6 +1652,7 @@ def _write_eager_lesson(
                 timestamp=now,
                 run_id=cycle_id,
                 cycle_status="partial",
+                **_structured,
             )
         else:
             lesson = LessonEntry(
@@ -1653,6 +1667,7 @@ def _write_eager_lesson(
                 timestamp=now,
                 run_id=cycle_id,
                 cycle_status="partial",
+                **_structured,
             )
 
         store.append(lesson)
@@ -2376,6 +2391,15 @@ def _execute_report_and_memory(
         lessons: list[LessonEntry] = []
 
         for r in results:
+            _structured = dict(
+                hypothesis_id=r.hypothesis_id,
+                hypothesis_type=r.hypothesis_type,
+                metric_name=metric_name,
+                metric_baseline=r.baseline_value,
+                metric_after=r.metric_value,
+                metric_delta=r.delta,
+                eval_method=r.eval_method,
+            )
             if r.improved:
                 lessons.append(LessonEntry(
                     stage_name="ahvs_execution",
@@ -2389,6 +2413,7 @@ def _execute_report_and_memory(
                     ),
                     timestamp=now,
                     run_id=cycle_id,
+                    **_structured,
                 ))
             elif r.error:
                 lessons.append(LessonEntry(
@@ -2401,6 +2426,7 @@ def _execute_report_and_memory(
                     ),
                     timestamp=now,
                     run_id=cycle_id,
+                    **_structured,
                 ))
             elif r.measurement_status != "measured":
                 # Infrastructure failure (extraction_failed, sandbox_error, etc.)
@@ -2419,6 +2445,7 @@ def _execute_report_and_memory(
                     ),
                     timestamp=now,
                     run_id=cycle_id,
+                    **_structured,
                 ))
             else:
                 lessons.append(LessonEntry(
@@ -2432,6 +2459,7 @@ def _execute_report_and_memory(
                     ),
                     timestamp=now,
                     run_id=cycle_id,
+                    **_structured,
                 ))
 
         if lessons:
@@ -2445,6 +2473,52 @@ def _execute_report_and_memory(
         status=StageStatus.DONE,
         artifacts=("report.md", "friction_log.md"),
     )
+
+
+def _update_lesson_verification(
+    config: AHVSConfig,
+    cycle_dir: Path,
+    summary: dict,
+) -> None:
+    """Update EvolutionStore lessons with keep/revert verification from Stage 8.
+
+    Sets ``verified="kept"`` on the best hypothesis's lessons and
+    ``verified="reverted"`` on all other lessons from this cycle.
+    """
+    from ahvs.evolution import EvolutionStore
+
+    try:
+        store = EvolutionStore(config.evolution_dir)
+        cycle_id = cycle_dir.name
+        best_id = summary.get("best_hypothesis")
+        all_lessons = store.load_all()
+
+        modified = False
+        for lesson in all_lessons:
+            if lesson.run_id != cycle_id:
+                continue
+            if not lesson.hypothesis_id:
+                continue
+            if lesson.hypothesis_id == best_id and best_id is not None:
+                lesson.verified = "kept"
+            else:
+                lesson.verified = "reverted"
+            modified = True
+
+        if modified:
+            store._lessons_path.write_text(
+                "".join(
+                    json.dumps(l.to_dict(), ensure_ascii=False) + "\n"
+                    for l in all_lessons
+                ),
+                encoding="utf-8",
+            )
+            logger.info(
+                "Updated lesson verification for cycle %s (best=%s)",
+                cycle_id, best_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Lesson verification update failed (non-fatal): %s", exc)
 
 
 def _execute_cycle_verify(
@@ -2548,6 +2622,9 @@ def _execute_cycle_verify(
     (cycle_dir / "cycle_summary.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
     )
+
+    # Feed keep/revert decision back into evolution lessons
+    _update_lesson_verification(config, cycle_dir, summary)
 
     print(f"\n[AHVS] Cycle complete — {recommendation}")
 

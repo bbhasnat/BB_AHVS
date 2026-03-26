@@ -3562,3 +3562,530 @@ class TestMaxLessonCyclesConfig:
         # Should only contain the lesson from the most recent cycle
         assert len(bundle["prior_lessons"]) == 1
         assert "20260303_000000" in bundle["prior_lessons"][0]
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Structured Outcomes on LessonEntry
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredLessonEntry:
+    """Tests for structured outcome fields on LessonEntry (Gap 3)."""
+
+    def test_backward_compat_old_jsonl_loads(self, tmp_path):
+        """Old JSONL lines without structured fields still deserialize."""
+        from ahvs.evolution import LessonEntry
+        old_entry = {
+            "stage_name": "ahvs_execution",
+            "stage_num": 6,
+            "category": "experiment",
+            "severity": "info",
+            "description": "Some old lesson",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "run_id": "20260101_000000",
+            "cycle_status": "complete",
+        }
+        lesson = LessonEntry.from_dict(old_entry)
+        assert lesson.hypothesis_id == ""
+        assert lesson.hypothesis_type == ""
+        assert lesson.metric_name == ""
+        assert lesson.metric_baseline is None
+        assert lesson.metric_after is None
+        assert lesson.metric_delta is None
+        assert lesson.files_changed is None
+        assert lesson.eval_method == ""
+        assert lesson.verified == ""
+        assert lesson.source_repo == ""
+
+    def test_structured_fields_round_trip(self, tmp_path):
+        """All structured fields survive to_dict → from_dict."""
+        from ahvs.evolution import LessonEntry
+        entry = LessonEntry(
+            stage_name="ahvs_execution",
+            stage_num=6,
+            category="experiment",
+            severity="info",
+            description="H1 improved answer_relevance",
+            timestamp="2026-03-26T12:00:00Z",
+            run_id="20260326_120000",
+            cycle_status="complete",
+            hypothesis_id="H1",
+            hypothesis_type="prompt_rewrite",
+            metric_name="answer_relevance",
+            metric_baseline=0.74,
+            metric_after=0.78,
+            metric_delta=0.04,
+            files_changed=["src/prompts.py", "config/system.txt"],
+            eval_method="promptfoo",
+            verified="kept",
+            source_repo="autoqa",
+        )
+        restored = LessonEntry.from_dict(entry.to_dict())
+        assert restored.hypothesis_id == "H1"
+        assert restored.hypothesis_type == "prompt_rewrite"
+        assert restored.metric_name == "answer_relevance"
+        assert restored.metric_baseline == 0.74
+        assert restored.metric_after == 0.78
+        assert restored.metric_delta == 0.04
+        assert restored.files_changed == ["src/prompts.py", "config/system.txt"]
+        assert restored.eval_method == "promptfoo"
+        assert restored.verified == "kept"
+        assert restored.source_repo == "autoqa"
+
+    def test_structured_fields_persist_to_jsonl(self, tmp_path):
+        """Structured fields survive append → load_all round-trip via JSONL."""
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        store = EvolutionStore(tmp_path / "evolution")
+        entry = LessonEntry(
+            stage_name="ahvs_execution",
+            stage_num=6,
+            category="experiment",
+            severity="info",
+            description="H2 improved precision",
+            timestamp="2026-03-26T12:00:00Z",
+            run_id="20260326_120000",
+            hypothesis_id="H2",
+            hypothesis_type="code_change",
+            metric_name="precision",
+            metric_baseline=0.80,
+            metric_after=0.85,
+            metric_delta=0.05,
+            eval_method="custom_script",
+        )
+        store.append(entry)
+        loaded = store.load_all()
+        assert len(loaded) == 1
+        assert loaded[0].hypothesis_id == "H2"
+        assert loaded[0].metric_delta == 0.05
+        assert loaded[0].eval_method == "custom_script"
+
+    def test_mixed_old_and_new_entries_coexist(self, tmp_path):
+        """A JSONL file with a mix of old (no structured) and new entries loads fine."""
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        evo_dir = tmp_path / "evolution"
+        evo_dir.mkdir()
+        jsonl = evo_dir / "lessons.jsonl"
+
+        old_line = json.dumps({
+            "stage_name": "ahvs_execution", "stage_num": 6,
+            "category": "experiment", "severity": "info",
+            "description": "Old lesson", "timestamp": "2026-01-01T00:00:00Z",
+            "run_id": "20260101_000000", "cycle_status": "complete",
+        })
+        new_line = json.dumps({
+            "stage_name": "ahvs_execution", "stage_num": 6,
+            "category": "experiment", "severity": "info",
+            "description": "New lesson", "timestamp": "2026-03-26T00:00:00Z",
+            "run_id": "20260326_000000", "cycle_status": "complete",
+            "hypothesis_id": "H1", "hypothesis_type": "prompt_rewrite",
+            "metric_name": "recall", "metric_baseline": 0.6,
+            "metric_after": 0.65, "metric_delta": 0.05,
+            "eval_method": "promptfoo", "verified": "kept",
+        })
+        jsonl.write_text(old_line + "\n" + new_line + "\n")
+
+        store = EvolutionStore(evo_dir)
+        lessons = store.load_all()
+        assert len(lessons) == 2
+        assert lessons[0].hypothesis_id == ""  # old entry
+        assert lessons[1].hypothesis_id == "H1"  # new entry
+        assert lessons[1].verified == "kept"
+
+    def test_defaults_for_none_float_fields(self):
+        """Float fields default to None when absent, not 0."""
+        from ahvs.evolution import LessonEntry
+        entry = LessonEntry.from_dict({
+            "stage_name": "ahvs_execution", "stage_num": 6,
+            "category": "experiment", "severity": "info",
+            "description": "test", "timestamp": "2026-01-01T00:00:00Z",
+        })
+        assert entry.metric_baseline is None
+        assert entry.metric_after is None
+        assert entry.metric_delta is None
+
+    def test_files_changed_none_vs_list(self):
+        """files_changed can be None or a list."""
+        from ahvs.evolution import LessonEntry
+        entry_none = LessonEntry.from_dict({
+            "stage_name": "x", "stage_num": 1, "category": "experiment",
+            "severity": "info", "description": "t", "timestamp": "2026-01-01T00:00:00Z",
+        })
+        assert entry_none.files_changed is None
+
+        entry_list = LessonEntry.from_dict({
+            "stage_name": "x", "stage_num": 1, "category": "experiment",
+            "severity": "info", "description": "t", "timestamp": "2026-01-01T00:00:00Z",
+            "files_changed": ["a.py", "b.py"],
+        })
+        assert entry_list.files_changed == ["a.py", "b.py"]
+
+    def test_compact_preserves_structured_fields(self, tmp_path):
+        """compact() doesn't drop structured fields when deduplicating."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        store = EvolutionStore(tmp_path / "evolution")
+        now = datetime.now(timezone.utc).isoformat()
+        # Partial (eager) with structured fields
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 improved answer_relevance",
+            timestamp=now, run_id="cycle_1", cycle_status="partial",
+            hypothesis_id="H1", metric_delta=0.03,
+        ))
+        # Complete (final) with same description prefix — should win
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 improved answer_relevance",
+            timestamp=now, run_id="cycle_1", cycle_status="complete",
+            hypothesis_id="H1", metric_delta=0.03, verified="kept",
+        ))
+        removed = store.compact()
+        assert removed == 1  # partial removed
+        lessons = store.load_all()
+        assert len(lessons) == 1
+        assert lessons[0].cycle_status == "complete"
+        assert lessons[0].hypothesis_id == "H1"
+        assert lessons[0].verified == "kept"
+
+    def test_query_returns_structured_fields(self, tmp_path):
+        """query_for_stage returns lessons with structured fields intact."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+        store = EvolutionStore(tmp_path / "evolution")
+        now = datetime.now(timezone.utc).isoformat()
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 improved metric",
+            timestamp=now, run_id="cycle_1", cycle_status="complete",
+            hypothesis_id="H1", hypothesis_type="prompt_rewrite",
+            metric_name="answer_relevance", metric_delta=0.04,
+        ))
+        results = store.query_for_stage("ahvs_execution", max_lessons=5)
+        assert len(results) == 1
+        assert results[0].hypothesis_id == "H1"
+        assert results[0].hypothesis_type == "prompt_rewrite"
+        assert results[0].metric_delta == 0.04
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Semantic Deduplication
+# ---------------------------------------------------------------------------
+
+
+class TestSemanticDedup:
+    """Tests for cross-cycle semantic deduplication (Gap 1)."""
+
+    def test_structured_fingerprint_cross_cycle_collapse(self, tmp_path):
+        """Same hypothesis_type + metric + delta from different cycles collapse."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        store = EvolutionStore(tmp_path / "evolution")
+        now = datetime.now(timezone.utc).isoformat()
+
+        # 5 cycles, same experiment type + outcome
+        for i in range(5):
+            store.append(LessonEntry(
+                stage_name="ahvs_execution", stage_num=6, category="experiment",
+                severity="info",
+                description=f"[cycle_{i}] H1 (prompt_rewrite) improved answer_relevance by +0.04",
+                timestamp=now, run_id=f"cycle_{i}", cycle_status="complete",
+                hypothesis_id="H1", hypothesis_type="prompt_rewrite",
+                metric_name="answer_relevance", metric_delta=0.04,
+            ))
+
+        removed = store.compact()
+        assert removed == 4  # collapsed 5 → 1
+        assert store.count() == 1
+
+    def test_structured_fingerprint_different_types_preserved(self, tmp_path):
+        """Different hypothesis_types are NOT collapsed."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        store = EvolutionStore(tmp_path / "evolution")
+        now = datetime.now(timezone.utc).isoformat()
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="prompt_rewrite improved",
+            timestamp=now, run_id="cycle_1", cycle_status="complete",
+            hypothesis_type="prompt_rewrite", metric_name="answer_relevance",
+            metric_delta=0.04,
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="code_change improved",
+            timestamp=now, run_id="cycle_2", cycle_status="complete",
+            hypothesis_type="code_change", metric_name="answer_relevance",
+            metric_delta=0.04,
+        ))
+
+        removed = store.compact()
+        assert removed == 0
+        assert store.count() == 2
+
+    def test_structured_fingerprint_different_deltas_preserved(self, tmp_path):
+        """Same type but different delta buckets are NOT collapsed."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        store = EvolutionStore(tmp_path / "evolution")
+        now = datetime.now(timezone.utc).isoformat()
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="small improvement",
+            timestamp=now, run_id="cycle_1", cycle_status="complete",
+            hypothesis_type="prompt_rewrite", metric_name="answer_relevance",
+            metric_delta=0.02,
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="large improvement",
+            timestamp=now, run_id="cycle_2", cycle_status="complete",
+            hypothesis_type="prompt_rewrite", metric_name="answer_relevance",
+            metric_delta=0.10,
+        ))
+
+        removed = store.compact()
+        assert removed == 0
+        assert store.count() == 2
+
+    def test_best_entry_kept_from_group(self, tmp_path):
+        """From a group of duplicates, the best entry (highest severity, most recent) wins."""
+        from datetime import datetime, timezone, timedelta
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        store = EvolutionStore(tmp_path / "evolution")
+        old = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        new = datetime.now(timezone.utc).isoformat()
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="prompt_rewrite improved",
+            timestamp=old, run_id="cycle_1", cycle_status="complete",
+            hypothesis_type="prompt_rewrite", metric_name="answer_relevance",
+            metric_delta=0.04,
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="warning", description="prompt_rewrite improved but regressed",
+            timestamp=new, run_id="cycle_2", cycle_status="complete",
+            hypothesis_type="prompt_rewrite", metric_name="answer_relevance",
+            metric_delta=0.04, verified="kept",
+        ))
+
+        store.compact()
+        lessons = store.load_all()
+        assert len(lessons) == 1
+        # Warning wins over info
+        assert lessons[0].severity == "warning"
+        assert lessons[0].verified == "kept"
+
+    def test_legacy_entries_conservative_dedup(self, tmp_path):
+        """Legacy entries (no structured fields) from different run_ids are preserved."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        store = EvolutionStore(tmp_path / "evolution")
+        now = datetime.now(timezone.utc).isoformat()
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 improved answer_relevance",
+            timestamp=now, run_id="cycle_1", cycle_status="complete",
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 improved answer_relevance",
+            timestamp=now, run_id="cycle_2", cycle_status="complete",
+        ))
+
+        removed = store.compact()
+        # Different run_ids → different fingerprints → both preserved
+        assert removed == 0
+        assert store.count() == 2
+
+    def test_fingerprint_function_directly(self):
+        """Direct test of _semantic_fingerprint."""
+        from ahvs.evolution import LessonEntry, _semantic_fingerprint
+
+        # Structured entries with same type/metric/delta get same fingerprint
+        e1 = LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="Completely different text A",
+            timestamp="2026-03-26T00:00:00Z", run_id="cycle_1",
+            hypothesis_type="prompt_rewrite", metric_name="precision",
+            metric_delta=0.05,
+        )
+        e2 = LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="Totally unrelated text B",
+            timestamp="2026-03-26T00:00:00Z", run_id="cycle_2",
+            hypothesis_type="prompt_rewrite", metric_name="precision",
+            metric_delta=0.05,
+        )
+        assert _semantic_fingerprint(e1) == _semantic_fingerprint(e2)
+
+        # Different metric_name → different fingerprint
+        e3 = LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="text",
+            timestamp="2026-03-26T00:00:00Z", run_id="cycle_3",
+            hypothesis_type="prompt_rewrite", metric_name="recall",
+            metric_delta=0.05,
+        )
+        assert _semantic_fingerprint(e1) != _semantic_fingerprint(e3)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Stage 8 Verification Feedback
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationFeedback:
+    """Tests for Stage 8 keep/revert feedback into lessons (Gap 4)."""
+
+    def test_update_marks_best_as_kept(self, tmp_path):
+        """_update_lesson_verification marks the best hypothesis as 'kept'."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        evo_dir = tmp_path / "evolution"
+        store = EvolutionStore(evo_dir)
+        now = datetime.now(timezone.utc).isoformat()
+        cycle_id = "20260326_120000"
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 improved",
+            timestamp=now, run_id=cycle_id, hypothesis_id="H1",
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H2 did not improve",
+            timestamp=now, run_id=cycle_id, hypothesis_id="H2",
+        ))
+
+        # Simulate config
+        config = type("C", (), {"evolution_dir": evo_dir})()
+        summary = {"best_hypothesis": "H1"}
+        cycle_dir = tmp_path / cycle_id
+        cycle_dir.mkdir()
+
+        from ahvs.executor import _update_lesson_verification
+        _update_lesson_verification(config, cycle_dir, summary)
+
+        lessons = store.load_all()
+        h1 = [l for l in lessons if l.hypothesis_id == "H1"][0]
+        h2 = [l for l in lessons if l.hypothesis_id == "H2"][0]
+        assert h1.verified == "kept"
+        assert h2.verified == "reverted"
+
+    def test_no_best_hypothesis_all_reverted(self, tmp_path):
+        """When best_hypothesis is None, all are marked reverted."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        evo_dir = tmp_path / "evolution"
+        store = EvolutionStore(evo_dir)
+        now = datetime.now(timezone.utc).isoformat()
+        cycle_id = "20260326_120000"
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 did not improve",
+            timestamp=now, run_id=cycle_id, hypothesis_id="H1",
+        ))
+
+        config = type("C", (), {"evolution_dir": evo_dir})()
+        summary = {"best_hypothesis": None}
+        cycle_dir = tmp_path / cycle_id
+        cycle_dir.mkdir()
+
+        from ahvs.executor import _update_lesson_verification
+        _update_lesson_verification(config, cycle_dir, summary)
+
+        lessons = store.load_all()
+        assert lessons[0].verified == "reverted"
+
+    def test_leaves_other_cycles_untouched(self, tmp_path):
+        """Verification only updates lessons from the current cycle."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        evo_dir = tmp_path / "evolution"
+        store = EvolutionStore(evo_dir)
+        now = datetime.now(timezone.utc).isoformat()
+
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 from old cycle",
+            timestamp=now, run_id="old_cycle", hypothesis_id="H1",
+        ))
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 from new cycle",
+            timestamp=now, run_id="new_cycle", hypothesis_id="H1",
+        ))
+
+        config = type("C", (), {"evolution_dir": evo_dir})()
+        summary = {"best_hypothesis": "H1"}
+        cycle_dir = tmp_path / "new_cycle"
+        cycle_dir.mkdir()
+
+        from ahvs.executor import _update_lesson_verification
+        _update_lesson_verification(config, cycle_dir, summary)
+
+        lessons = store.load_all()
+        old = [l for l in lessons if l.run_id == "old_cycle"][0]
+        new = [l for l in lessons if l.run_id == "new_cycle"][0]
+        assert old.verified == ""  # untouched
+        assert new.verified == "kept"
+
+    def test_verified_kept_boosts_query_weight(self, tmp_path):
+        """Verified-kept lessons rank higher in query_for_stage."""
+        from datetime import datetime, timezone
+        from ahvs.evolution import EvolutionStore, LessonEntry
+
+        store = EvolutionStore(tmp_path / "evolution")
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Reverted lesson — should rank lower
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H1 reverted lesson",
+            timestamp=now, run_id="cycle_1", hypothesis_id="H1",
+            verified="reverted",
+        ))
+        # Kept lesson — should rank higher
+        store.append(LessonEntry(
+            stage_name="ahvs_execution", stage_num=6, category="experiment",
+            severity="info", description="H2 kept lesson",
+            timestamp=now, run_id="cycle_2", hypothesis_id="H2",
+            verified="kept",
+        ))
+
+        results = store.query_for_stage("ahvs_execution", max_lessons=5)
+        assert len(results) == 2
+        assert results[0].verified == "kept"  # ranked first
+        assert results[1].verified == "reverted"
+
+    def test_noop_when_no_lessons_for_cycle(self, tmp_path):
+        """Verification is a no-op when no matching lessons exist."""
+        from ahvs.evolution import EvolutionStore
+
+        evo_dir = tmp_path / "evolution"
+        store = EvolutionStore(evo_dir)
+        # Empty store
+        config = type("C", (), {"evolution_dir": evo_dir})()
+        summary = {"best_hypothesis": "H1"}
+        cycle_dir = tmp_path / "cycle_1"
+        cycle_dir.mkdir()
+
+        from ahvs.executor import _update_lesson_verification
+        _update_lesson_verification(config, cycle_dir, summary)
+
+        # Should not crash, store still empty
+        assert store.count() == 0

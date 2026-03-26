@@ -26,9 +26,11 @@ Usage
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
+import re as _re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -61,6 +63,18 @@ class LessonEntry:
     run_id: str = ""
     cycle_status: str = "complete"  # "complete", "failed", "partial"
 
+    # Structured outcome fields (all optional — backward-compatible with old JSONL)
+    hypothesis_id: str = ""
+    hypothesis_type: str = ""
+    metric_name: str = ""
+    metric_baseline: float | None = None
+    metric_after: float | None = None
+    metric_delta: float | None = None
+    files_changed: list[str] | None = None
+    eval_method: str = ""
+    verified: str = ""        # "", "kept", "reverted"
+    source_repo: str = ""     # populated only in global store
+
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
@@ -75,6 +89,16 @@ class LessonEntry:
             timestamp=str(data.get("timestamp", "")),
             run_id=str(data.get("run_id", "")),
             cycle_status=str(data.get("cycle_status", "complete")),
+            hypothesis_id=str(data.get("hypothesis_id", "")),
+            hypothesis_type=str(data.get("hypothesis_type", "")),
+            metric_name=str(data.get("metric_name", "")),
+            metric_baseline=data.get("metric_baseline"),
+            metric_after=data.get("metric_after"),
+            metric_delta=data.get("metric_delta"),
+            files_changed=data.get("files_changed"),
+            eval_method=str(data.get("eval_method", "")),
+            verified=str(data.get("verified", "")),
+            source_repo=str(data.get("source_repo", "")),
         )
 
 
@@ -340,6 +364,68 @@ def _time_weight(timestamp_iso: str) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Semantic deduplication helpers
+# ---------------------------------------------------------------------------
+
+_STOP_WORDS: frozenset = frozenset({
+    "a", "an", "the", "is", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would",
+    "could", "should", "may", "might", "shall", "can", "to", "of",
+    "in", "for", "on", "with", "at", "by", "from", "as", "into",
+    "not", "no", "but", "or", "and", "if", "it", "its", "this",
+    "that", "than", "so", "are", "am", "we", "they", "he", "she",
+})
+
+
+def _semantic_fingerprint(entry: LessonEntry) -> str:
+    """Compute a fingerprint for cross-cycle semantic dedup.
+
+    Strategy:
+      1. If structured fields present (hypothesis_type + metric_name populated),
+         fingerprint = hash(hypothesis_type, metric_name, rounded delta, severity).
+         ``run_id`` and ``hypothesis_id`` are excluded so that cross-cycle
+         duplicates (same experiment type, same outcome) collapse.
+      2. Fallback for legacy entries: include ``run_id`` to be conservative
+         since we can't reliably distinguish different hypotheses from
+         paraphrases without structured data.
+    """
+    if entry.hypothesis_type and entry.metric_name:
+        delta_bucket = round(entry.metric_delta, 2) if entry.metric_delta is not None else "none"
+        canonical = f"{entry.hypothesis_type}|{entry.metric_name}|{delta_bucket}"
+        return hashlib.md5(canonical.encode()).hexdigest()[:16]
+
+    # Fallback: text-based fingerprint (conservative — includes run_id)
+    text = entry.description.lower()
+    # Strip only cycle IDs like [20260326_120000]
+    text = _re.sub(r"\[\d{8}_\d{6}\]", "", text)
+    # Extract alphanumeric tokens (keeps h1, h2, etc.)
+    tokens = _re.findall(r"[a-z][a-z0-9]*", text)
+    # Remove stopwords, pure-alpha single chars, and sort
+    tokens = sorted(set(
+        t for t in tokens if len(t) >= 2 and t not in _STOP_WORDS
+    ))
+    canonical = "|".join(tokens) + f"|{entry.severity}|{entry.run_id}"
+    return hashlib.md5(canonical.encode()).hexdigest()[:16]
+
+
+def _pick_best_from_group(entries: list) -> LessonEntry:
+    """From a group of semantically similar lessons, keep the best one.
+
+    Priority: highest severity → most recent → most complete structured data.
+    """
+    _SEV_RANK = {"error": 3, "warning": 2, "info": 1}
+
+    def _score(e: LessonEntry) -> tuple:
+        sev = _SEV_RANK.get(e.severity, 0)
+        # Prefer entries with structured data populated
+        has_structured = 1 if e.hypothesis_type else 0
+        has_verified = 1 if e.verified else 0
+        return (sev, e.timestamp, has_structured, has_verified)
+
+    return max(entries, key=_score)
+
+
+# ---------------------------------------------------------------------------
 # Evolution store
 # ---------------------------------------------------------------------------
 
@@ -439,6 +525,11 @@ class EvolutionStore:
             # Boost errors over warnings/info
             if lesson.severity == "error":
                 weight *= 1.5
+            # Boost/penalize based on verification outcome
+            if lesson.verified == "kept":
+                weight *= 1.5
+            elif lesson.verified == "reverted":
+                weight *= 0.5
             scored.append((weight, lesson))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [entry for _, entry in scored[:max_lessons]]
@@ -523,7 +614,7 @@ class EvolutionStore:
             l for l in all_lessons if _time_weight(l.timestamp) > 0.0
         ]
 
-        # Deduplicate by (run_id, description prefix).
+        # Phase 1: Deduplicate by (run_id, description prefix).
         # Prefer "complete" over "partial" when both exist for the same key.
         best: dict[tuple[str, str], LessonEntry] = {}
         _STATUS_RANK = {"complete": 2, "partial": 1}
@@ -536,7 +627,15 @@ class EvolutionStore:
                 existing.cycle_status, 0
             ):
                 best[key] = lesson
-        deduped = list(best.values())
+        after_exact = list(best.values())
+
+        # Phase 2: Cross-cycle semantic dedup.
+        # Group by semantic fingerprint; keep the best entry per group.
+        fingerprint_groups: dict[str, list[LessonEntry]] = {}
+        for lesson in after_exact:
+            fp = _semantic_fingerprint(lesson)
+            fingerprint_groups.setdefault(fp, []).append(lesson)
+        deduped = [_pick_best_from_group(group) for group in fingerprint_groups.values()]
 
         removed = before - len(deduped)
         if removed > 0:
