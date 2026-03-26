@@ -1681,7 +1681,7 @@ def _execute_validation_plan(
                 )
             else:
                 eval_dep_context = (
-                    f"## ⚠ EVAL ISOLATION — CRITICAL FOR PLANNING ⚠\n"
+                    f"## ⚠ SELF-CONTAINED EVAL — PLANS MUST TARGET `{entry_name}` ⚠\n"
                     f"The eval entry point `{entry_name}` does NOT "
                     f"import from any other repo source files. It is "
                     f"**self-contained** with its own training loop, "
@@ -1689,12 +1689,12 @@ def _execute_validation_plan(
                     f"**Changes to other Python files (e.g. "
                     f"`Train_model.py`) will have ZERO effect on the "
                     f"metric.**\n\n"
-                    f"`{entry_name}` is a protected file (blocked from "
-                    f"direct modification). Plans MUST structure changes "
-                    f"as a new importable module that `{entry_name}` "
-                    f"can pick up, or document the exact changes needed "
-                    f"inside `{entry_name}` so the framework can "
-                    f"selectively apply them.\n\n"
+                    f"The framework will safely apply changes to "
+                    f"`{entry_name}` via AST splice (merging only "
+                    f"changed functions/classes). Plans MUST instruct "
+                    f"the code agent to output modified functions from "
+                    f"`{entry_name}` directly — NOT to modify other "
+                    f"files like `Train_model.py`.\n\n"
                 )
 
     pm = AHVSPromptManager(config.prompts_override_path)
@@ -2101,6 +2101,7 @@ def _run_single_hypothesis(
         entry_name, eval_deps, _all_py = _analyze_eval_dependencies(
             eval_command, config.repo_path,
         )
+        _eval_is_self_contained = False
         if entry_name is not None:
             if eval_deps:
                 deps_list = ", ".join(f"`{d}`" for d in eval_deps)
@@ -2114,30 +2115,45 @@ def _run_single_hypothesis(
                     f"eval result.\n\n"
                 )
             else:
-                # Self-contained eval — warn prominently
+                # Self-contained eval — the framework will splice changes
+                # into the eval entry point via AST merge (safe: only
+                # replaces changed functions/classes, preserves the rest).
+                _eval_is_self_contained = True
                 eval_section += (
-                    f"## ⚠ EVAL ISOLATION WARNING — READ CAREFULLY ⚠\n"
+                    f"## ⚠ SELF-CONTAINED EVAL — MODIFY `{entry_name}` DIRECTLY ⚠\n"
                     f"The eval entry point `{entry_name}` does NOT import from "
                     f"any other repo source files. It is **self-contained** — "
                     f"it has its own training loop, model setup, and evaluation "
                     f"logic.\n\n"
-                    f"**This means changes to other Python files in this repo "
-                    f"(e.g. `Train_model.py`) will have ZERO effect on the "
-                    f"measured metric.**\n\n"
-                    f"Since `{entry_name}` is a protected file (blocked from "
-                    f"modification), you must implement your hypothesis changes "
-                    f"as a NEW importable module and modify the eval's shared "
-                    f"dependencies. If no shared dependencies exist, document "
-                    f"exactly what parameters/code in `{entry_name}` would need "
-                    f"to change and output those changes — the framework may "
-                    f"selectively apply them.\n\n"
+                    f"**Changes to other Python files (e.g. `Train_model.py`) "
+                    f"will have ZERO effect on the measured metric.**\n\n"
+                    f"**You MUST output your changes as modifications to "
+                    f"`{entry_name}` itself.** Output ONLY the functions, "
+                    f"classes, or constants you are changing — the framework "
+                    f"will safely splice them into the existing file via AST "
+                    f"merge (replacing only the definitions you provide while "
+                    f"preserving everything else).\n\n"
+                    f"Do NOT modify `Train_model.py` or other files that "
+                    f"`{entry_name}` does not import — those changes will be "
+                    f"ignored.\n\n"
                 )
-                logger.warning(
-                    "Eval entry point %s is self-contained (no repo-local "
-                    "imports). Hypotheses modifying other repo files will not "
-                    "affect the metric. This is likely a dead-end configuration.",
+                logger.info(
+                    "Eval entry point %s is self-contained — enabling "
+                    "AST-splice passthrough for forbidden file filter.",
                     entry_name,
                 )
+
+        # When eval is self-contained, update the PROTECTED FILES section
+        # to avoid contradicting the splice-allowed guidance above.
+        if _eval_is_self_contained and entry_name:
+            repo_grounding = repo_grounding.replace(
+                f"**BLOCKED (changes will be rejected by the framework):**\n"
+                f"- `run_eval.py` or any file matching `**/run_eval.py` (eval entry point)\n",
+                f"**BLOCKED (changes will be rejected by the framework):**\n"
+                f"- ~~`run_eval.py`~~ **SPLICE-ALLOWED** — self-contained eval; "
+                f"your changes to `{entry_name}` will be merged via AST splice "
+                f"(only changed functions/classes are replaced)\n",
+            )
     problem = (
         f"# AHVS Hypothesis Execution\n\n"
         f"## Hypothesis {hyp_id}\n"
@@ -2298,6 +2314,33 @@ def _run_single_hypothesis(
         for filename, content in remapped_files.items():
             reason = _is_forbidden_file(filename, repo_has_src=_repo_has_src)
             if reason is not None:
+                # ── Self-contained eval splice passthrough ─────────
+                # When the eval is self-contained (no repo-local imports),
+                # the eval entry point is the ONLY file that matters.
+                # Instead of hard-blocking it, allow it through — the
+                # existing splice=True in apply_files() will merge only
+                # the changed functions/classes via AST splice, preserving
+                # the eval infrastructure.
+                from pathlib import PurePosixPath as _PP2
+                _basename = _PP2(filename).name
+                if (
+                    _eval_is_self_contained
+                    and entry_name is not None
+                    and _basename == entry_name
+                ):
+                    logger.info(
+                        "%s: SPLICE-PASSTHROUGH for %s — eval is "
+                        "self-contained, allowing AST-spliced changes "
+                        "to eval entry point (would normally be blocked: %s)",
+                        hyp_id, filename, reason,
+                    )
+                    print(
+                        f"[AHVS] {hyp_id}: allowing {filename} via AST "
+                        f"splice (self-contained eval passthrough)"
+                    )
+                    filtered_files[filename] = content
+                    continue
+
                 logger.warning(
                     "%s: BLOCKED %s from worktree apply — %s",
                     hyp_id, filename, reason,
