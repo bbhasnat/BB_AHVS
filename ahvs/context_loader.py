@@ -9,7 +9,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ahvs.evolution import EvolutionStore
+from ahvs.evolution import EvolutionStore, _semantic_fingerprint
 
 BASELINE_REQUIRED_FIELDS = ("primary_metric", "recorded_at", "eval_command")
 
@@ -146,8 +146,9 @@ def load_context_bundle(
     - domain tags (inferred from repo dependencies)
 
     Args:
-        max_lesson_cycles: Only include lessons from the last K complete
-            cycles.  0 = unlimited (time-decay still applies).
+        max_lesson_cycles: Only include lessons from the last K recent
+            non-failed cycle IDs. Partial-cycle lessons are included.
+            0 = unlimited (time-decay still applies).
         global_evolution_dir: Path to global evolution store for cross-project
             lessons.  Defaults to None (no cross-project query).
         enable_cross_project: Whether to include cross-project lessons.
@@ -174,8 +175,10 @@ def load_context_bundle(
 
     # Merge cross-project lessons (global store)
     global_lessons: list[LessonEntry] = []
+    remaining_slots = max(0, 12 - len(lessons))
     if (
-        enable_cross_project
+        remaining_slots > 0
+        and enable_cross_project
         and global_evolution_dir is not None
         and global_evolution_dir.exists()
     ):
@@ -184,16 +187,18 @@ def load_context_bundle(
             global_store = GlobalEvolutionStore(global_evolution_dir)
             global_lessons = global_store.query_cross_project(
                 "ahvs_execution",
-                max_lessons=3,
+                max_lessons=min(3, remaining_slots),
                 exclude_repo=repo_path.name,
             )
         except Exception:  # noqa: BLE001
             pass
 
     # Merge: local lessons take priority, global fill remaining
-    local_descs = {l.description for l in lessons}
+    # Use semantic fingerprints (same mechanism as compact/promote) so that
+    # reworded duplicates are caught, not just exact description matches.
+    local_fps = {_semantic_fingerprint(l) for l in lessons}
     for gl in global_lessons:
-        if gl.description not in local_descs:
+        if _semantic_fingerprint(gl) not in local_fps:
             lessons.append(gl)
 
     metric_key = baseline["primary_metric"]

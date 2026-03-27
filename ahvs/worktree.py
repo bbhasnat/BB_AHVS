@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import ast
 import logging
+import os
+import signal
 import subprocess
 import textwrap
 import time
@@ -248,6 +250,46 @@ class HypothesisWorktree:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def _terminate_eval_process_group(
+        self,
+        proc: subprocess.Popen[str],
+        *,
+        grace_sec: float = 3.0,
+    ) -> None:
+        """Best-effort teardown of the full eval process group.
+
+        Eval commands often launch child Python/DataLoader workers. Killing only
+        the shell parent can leave descendants holding CPU/GPU memory. By
+        running evals in a dedicated session and terminating the entire process
+        group, AHVS avoids leaking resources between hypotheses.
+        """
+        if proc.poll() is not None:
+            return
+
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            return
+
+        deadline = time.monotonic() + grace_sec
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                return
+            time.sleep(0.1)
+
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            return
+
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "Timed out waiting for eval process group %s to exit after SIGKILL",
+                proc.pid,
+            )
 
     def create(self) -> None:
         """Create a detached worktree at repo HEAD.
@@ -519,31 +561,42 @@ class HypothesisWorktree:
             )
         t0 = time.monotonic()
         try:
-            r = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
                 shell=True,
                 cwd=str(self.eval_cwd),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
-                check=False,
+                start_new_session=True,
             )
+            stdout, stderr = proc.communicate(timeout=timeout)
             elapsed = time.monotonic() - t0
+            # Cap captured output to avoid unbounded memory from chatty evals
+            _MAX_OUTPUT = 1_000_000  # 1 MB
             return EvalResult(
-                returncode=r.returncode,
-                stdout=r.stdout,
-                stderr=r.stderr,
+                returncode=proc.returncode,
+                stdout=stdout[-_MAX_OUTPUT:] if len(stdout) > _MAX_OUTPUT else stdout,
+                stderr=stderr[-_MAX_OUTPUT:] if len(stderr) > _MAX_OUTPUT else stderr,
                 elapsed_sec=round(elapsed, 2),
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            self._terminate_eval_process_group(proc)
             elapsed = time.monotonic() - t0
+            stderr = f"eval_command timed out after {timeout}s"
+            if exc.stderr:
+                stderr += f"\n\nPartial stderr:\n{exc.stderr[:2000]}"
             return EvalResult(
                 returncode=-1,
-                stdout="",
-                stderr=f"eval_command timed out after {timeout}s",
+                stdout=exc.stdout or "",
+                stderr=stderr,
                 elapsed_sec=round(elapsed, 2),
                 timed_out=True,
             )
+        except Exception:
+            if "proc" in locals():
+                self._terminate_eval_process_group(proc)
+            raise
 
     def capture_diff(self) -> str:
         """Return `git diff` output from the worktree (staged + unstaged)."""

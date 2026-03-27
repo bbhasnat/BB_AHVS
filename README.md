@@ -106,6 +106,8 @@ Stage 7  AHVS_REPORT_MEMORY    LLM writes cycle report; lessons -> EvolutionStor
 Stage 8  AHVS_CYCLE_VERIFY     Validate all artifacts; write cycle_summary.json
 ```
 
+For ML or other resource-heavy evals, Stage 6 now tears down timed-out or crashed eval subprocesses before moving on. This helps prevent orphan workers from holding GPU or CPU memory after a hypothesis fails.
+
 The gate at Stage 4 pauses for human input. It supports four selection modes:
 
 1. **Pre-specified** — If `selection.json` already exists in the cycle directory (e.g. written by a conversational Claude Code session), the gate honours it and skips all prompts. This is how conversational mode works: Claude shows you the hypotheses, you say which to run, Claude writes `selection.json`, and the executor respects your choice.
@@ -457,7 +459,7 @@ ahvs [options]
 | `--repo`, `-r` | *(required)* | Path to target repository |
 | `--question`, `-q` | *(required)* | The cycle question (what to improve) |
 | `--max-hypotheses` | `3` | How many hypotheses to generate (max 5) |
-| `--max-lesson-cycles` | `5` | Load lessons from last K complete cycles only (0 = unlimited) |
+| `--max-lesson-cycles` | `5` | Load lessons from last K recent non-failed cycle IDs (0 = unlimited) |
 | `--auto-approve` | off | Skip interactive gate; run all hypotheses |
 | `--selection` | none | Pre-specify hypotheses to run (e.g. `H1,H3`). For conversational/agent-driven mode. |
 | `--from-stage` | *(stage 1)* | Resume from a specific stage name |
@@ -658,7 +660,7 @@ Each hypothesis result is written to `lessons.jsonl` immediately after measureme
 
 ### Memory management
 
-The `--max-lesson-cycles K` flag (default: 5) caps how many recent complete cycles feed into hypothesis generation. Set to 0 for unlimited (time-decay with 30-day half-life still applies; lessons older than 90 days are expired).
+The `--max-lesson-cycles K` flag (default: 5) caps how many recent non-failed cycle IDs feed into hypothesis generation (partial-cycle lessons are included). Set to 0 for unlimited (time-decay with 30-day half-life still applies; lessons older than 90 days are expired).
 
 **Automatic housekeeping** runs at the start of every new cycle:
 
@@ -684,7 +686,7 @@ A **GlobalEvolutionStore** at `~/.ahvs/global/evolution/` enables framework-leve
 - **SYSTEM** and **PIPELINE** category lessons (infrastructure issues, not repo-specific)
 - **Verified-kept** lessons (proven improvements, transferable patterns)
 
-During Stage 2, up to 3 global lessons (excluding the current repo) are merged into the context bundle. This can be disabled with `enable_cross_project=False`.
+During Stage 2, local lessons are loaded first (up to 12); global lessons only fill any remaining capacity (up to 3, excluding the current repo) and are deduplicated against local lessons using semantic fingerprints. This can be disabled with `enable_cross_project=False`.
 
 At Stage 2 (`AHVS_CONTEXT_LOAD`), AHVS queries the top 12 lessons from the store using the stage name `"ahvs_execution"` — the same name used when writing lessons at Stage 7. This ensures the EvolutionStore's 2x relevance boost applies correctly to AHVS-specific lessons. Lessons with severity `"info"` are treated as positive outcomes; those with `"warning"` or `"error"` are surfaced as rejected approaches. The LLM sees both what has worked and what has been ruled out, producing increasingly targeted hypotheses over time.
 
@@ -799,6 +801,7 @@ When `eval_command` is configured, it is the **only trusted measurement source**
 **Diagnosing `extraction_failed`:**
 - Check `tool_runs/<ID>/` for generated files — did Claude Code produce code?
 - Check the eval_command stderr in the logs — did the eval crash?
+- For GPU-heavy evals, confirm the machine had enough free VRAM before the run. AHVS cleans up timed-out/crashed eval workers, but external processes can still block a hypothesis from starting or finishing.
 - Ensure the hypothesis code writes the metric in a parseable format (JSON or `key: value`)
 
 ---
@@ -813,6 +816,7 @@ When `eval_command` is configured, it is the **only trusted measurement source**
 | `question` | `str` | *(required)* | Cycle question |
 | `run_dir` | `Path` | `<repo>/.ahvs/cycles/<ts>` | Cycle output directory |
 | `max_hypotheses` | `int` | `3` | Max hypotheses to generate (hard cap: 5) |
+| `max_lesson_cycles` | `int` | `5` | Load lessons from last K recent non-failed cycle IDs (0 = unlimited) |
 | `regression_guard_path` | `Path \| None` | `None` | Path to regression guard script |
 | `apply_best` | `bool` | `False` | Auto-apply best improving hypothesis patch after cycle |
 | `skill_registry_path` | `Path \| None` | `None` | Custom skills YAML |
@@ -827,6 +831,9 @@ When `eval_command` is configured, it is the **only trusted measurement source**
 | `acpx_command` | `str` | `""` | Path to acpx binary (auto-detect if empty) |
 | `acp_session_name` | `str` | `"ahvs"` | ACP session name |
 | `acp_timeout_sec` | `int` | `1800` | ACP per-prompt timeout in seconds |
+| `enable_cross_project` | `bool` | `True` | Enable global cross-project lesson sharing |
+| `global_evolution_dir` | `Path` | `~/.ahvs/global/evolution` | Path to global evolution store |
+| `eval_timeout_sec` | `int` | `600` | Timeout for eval_command in seconds (overridden by `eval_timeout` in baseline_metric.json) |
 
 ### Derived paths (automatic)
 
@@ -1222,7 +1229,7 @@ If either the original or partial file has syntax errors, the merge falls back g
 
 ### Test coverage
 
-271 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, memory management (cycle cleanup, lesson compaction, eager writes, cycle-status filtering, structured outcomes, semantic deduplication, verification feedback, friction log summarization, memory file lifecycle, historical digest, cross-project learning), and regression tests for all known framework bugs.
+274 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, memory management (cycle cleanup, lesson compaction, eager writes, cycle-status filtering, structured outcomes, semantic deduplication, verification feedback, friction log summarization, memory file lifecycle, historical digest, cross-project learning), and regression tests for all known framework bugs.
 
 Tests work from a fresh checkout — no `pip install -e .` or `PYTHONPATH` required (`conftest.py` bootstraps the import path):
 

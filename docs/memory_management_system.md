@@ -142,7 +142,7 @@ Time decay is applied at **query time**, not write time. This means lessons rema
 store.query_for_stage(
     "ahvs_execution",
     max_lessons=12,      # top N by weight
-    max_cycles=5,        # from last K complete cycles (0 = unlimited)
+    max_cycles=5,        # from last K recent non-failed cycle IDs (0 = unlimited)
 )
 ```
 
@@ -161,7 +161,7 @@ Each lesson's time-decay weight is modified by multipliers:
 
 - Lessons with `cycle_status="failed"` are excluded (infrastructure crashes with no hypothesis data)
 - Lessons with `cycle_status="partial"` are included (eager writes from Stage 6)
-- When `max_cycles > 0`, only lessons from the K most recent cycle IDs are considered
+- When `max_cycles > 0`, only lessons from the K most recent non-failed cycle IDs are considered
 
 ### Consumption in Stage 2
 
@@ -225,7 +225,7 @@ Before deduplication, entries older than `MAX_AGE_DAYS` (90 days) are dropped en
 
 1. **Stage-1 failures** -- crashed at setup, no artifacts
 2. **Orphan dirs** -- no `ahvs_checkpoint.json` (manual test dirs, etc.)
-3. **Partial cycles** -- reached execution but never completed Stage 8 (results are already in `lessons.jsonl` via eager writes)
+3. **Partial cycles** -- any non-complete cycle that is not a Stage-1 failure or orphan (results may already be in `lessons.jsonl` via eager writes)
 4. **Old complete cycles** -- beyond the retention window (keeps the 3 most recent complete cycles for auditing)
 
 ---
@@ -335,7 +335,7 @@ global_store.query_cross_project(
 
 ### Integration into context bundle
 
-During Stage 2, if `enable_cross_project=True` (the default) and the global store exists, up to 3 global lessons are merged into the context bundle. Local lessons take priority; global lessons fill remaining slots.
+During Stage 2, if `enable_cross_project=True` (the default) and the global store exists, up to 3 global lessons are merged into the context bundle. Local lessons are loaded first (up to 12); global lessons only fill any remaining capacity and are deduplicated against local lessons using semantic fingerprints (the same mechanism used by `compact()` and `promote_lessons()`).
 
 ### Opting out
 
@@ -382,6 +382,8 @@ Stage 8: CYCLE_VERIFY
   compact() -- expire old lessons + exact dedup + semantic dedup
   compact_friction_logs() -- summarize retained friction logs
   compact_memory_files() -- stale-mark and archive old memory files
+
+[End of Successful Cycle]
   promote_lessons() -- copy qualifying lessons to global store
 ```
 
@@ -391,7 +393,7 @@ Stage 8: CYCLE_VERIFY
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `max_lesson_cycles` | `5` | Load lessons from last K complete cycles (0 = unlimited) |
+| `max_lesson_cycles` | `5` | Load lessons from last K recent non-failed cycle IDs (0 = unlimited) |
 | `memory_stale_days` | `60` | Prepend `[STALE]` marker to old memory files |
 | `memory_archive_days` | `120` | Move very old memory files to `archive/` |
 | `enable_cross_project` | `True` | Enable global cross-project lesson sharing |

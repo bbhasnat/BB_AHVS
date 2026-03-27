@@ -488,8 +488,8 @@ class EvolutionStore:
             stage_name: Stage name to boost (2x weight for direct matches).
             max_lessons: Maximum number of lessons to return.
             max_cycles: Only include lessons from the K most recent
-                **complete** cycles.  0 means no cycle cap (time-decay
-                still applies).
+                non-failed cycle IDs. Partial-cycle lessons are included.
+                0 means no cycle cap (time-decay still applies).
         """
         all_lessons = self.load_all()
 

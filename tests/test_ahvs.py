@@ -20,6 +20,7 @@ import os
 import stat
 import subprocess
 import textwrap
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -462,6 +463,40 @@ class TestHypothesisWorktree:
 
         wt.cleanup()
 
+    def test_run_eval_command_timeout_kills_child_processes(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+
+        wt_path = tmp_path / "worktrees" / "H1"
+        wt = HypothesisWorktree(repo, wt_path)
+        wt.create()
+
+        cmd = textwrap.dedent("""\
+            python3 -c "import pathlib, subprocess, time; \
+child = subprocess.Popen(['python3', '-c', 'import time; time.sleep(60)']); \
+pathlib.Path('child_pid.txt').write_text(str(child.pid)); \
+time.sleep(60)"
+        """).strip()
+
+        result = wt.run_eval_command(cmd, timeout=1)
+
+        child_pid_path = wt.eval_cwd / "child_pid.txt"
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not child_pid_path.exists():
+            time.sleep(0.05)
+
+        assert result.returncode == -1
+        assert result.timed_out is True
+        assert child_pid_path.exists()
+
+        child_pid = int(child_pid_path.read_text().strip())
+        time.sleep(0.2)
+        with pytest.raises(ProcessLookupError):
+            os.kill(child_pid, 0)
+
+        wt.cleanup()
+
     def test_create_fails_not_git_repo(self, tmp_path: Path) -> None:
         """Worktree creation on a non-git directory raises RuntimeError."""
         not_a_repo = tmp_path / "not_a_repo"
@@ -651,6 +686,67 @@ class TestExecuteSetup:
 
         assert result.status == StageStatus.FAILED
         assert "Pre-flight failed" in (result.error or "") or "baseline" in (result.error or "").lower()
+
+
+class TestExecuteContextLoad:
+    """Test Stage 2: context loading uses both local and configured global memory."""
+
+    def test_context_load_wires_cross_project_memory_from_config(self, tmp_path: Path) -> None:
+        from datetime import datetime, timezone
+        from ahvs.evolution import GlobalEvolutionStore, LessonEntry, LessonCategory
+        from ahvs.skills import SkillLibrary
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".ahvs").mkdir()
+
+        baseline = {
+            "primary_metric": "precision",
+            "precision": 0.85,
+            "recorded_at": "2026-03-26T10:00:00Z",
+            "eval_command": "echo test",
+        }
+        (repo / ".ahvs" / "baseline_metric.json").write_text(json.dumps(baseline))
+
+        global_dir = tmp_path / "global" / "evolution"
+        gstore = GlobalEvolutionStore(global_dir)
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        gstore.append(LessonEntry(
+            stage_name="ahvs_execution",
+            stage_num=6,
+            category=LessonCategory.SYSTEM,
+            severity="warning",
+            description="Cross-project lesson from another repo",
+            timestamp=now,
+            run_id="20260326_000000",
+            source_repo="other_repo",
+        ))
+
+        cycle_dir = tmp_path / "cycle_001"
+        cycle_dir.mkdir()
+        config = AHVSConfig(
+            repo_path=repo,
+            question="improve precision",
+            run_dir=cycle_dir,
+            global_evolution_dir=global_dir,
+            enable_cross_project=True,
+        )
+        skill_lib = SkillLibrary()
+
+        result = execute_ahvs_stage(
+            AHVSStage.AHVS_CONTEXT_LOAD,
+            cycle_dir=cycle_dir,
+            config=config,
+            skill_library=skill_lib,
+            auto_approve=True,
+        )
+
+        assert result.status == StageStatus.DONE
+        bundle = json.loads((cycle_dir / "context_bundle.json").read_text())
+        assert any(
+            "Cross-project lesson from another repo" in item
+            for item in bundle["rejected_approaches"]
+        )
 
 
 class TestCycleVerify:
@@ -4518,6 +4614,73 @@ class TestGlobalEvolutionStore:
         )
         # Should succeed without errors
         assert "prior_lessons" in bundle
+
+    def test_global_lessons_only_fill_remaining_capacity(self, tmp_path):
+        """Global lessons should fill unused slots, not exceed the 12-lesson local cap."""
+        from datetime import datetime, timezone
+        from ahvs.context_loader import load_context_bundle
+        from ahvs.evolution import EvolutionStore, GlobalEvolutionStore, LessonEntry, LessonCategory
+
+        evo_dir = tmp_path / "local" / "evolution"
+        global_dir = tmp_path / "global" / "evolution"
+        local = EvolutionStore(evo_dir)
+        gstore = GlobalEvolutionStore(global_dir)
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        for i in range(11):
+            local.append(LessonEntry(
+                stage_name="ahvs_execution",
+                stage_num=6,
+                category=LessonCategory.EXPERIMENT,
+                severity="info",
+                description=f"Local lesson {i} with enough detail to survive prior lesson filtering",
+                timestamp=now,
+                run_id="20260326_000000",
+                cycle_status="complete",
+            ))
+
+        gstore.append(LessonEntry(
+            stage_name="ahvs_execution",
+            stage_num=6,
+            category=LessonCategory.SYSTEM,
+            severity="warning",
+            description="Global lesson A",
+            timestamp=now,
+            run_id="20260327_000000",
+            source_repo="other_repo_a",
+        ))
+        gstore.append(LessonEntry(
+            stage_name="ahvs_execution",
+            stage_num=6,
+            category=LessonCategory.SYSTEM,
+            severity="warning",
+            description="Global lesson B",
+            timestamp=now,
+            run_id="20260327_000001",
+            source_repo="other_repo_b",
+        ))
+
+        bp = tmp_path / "baseline_metric.json"
+        bp.write_text(json.dumps({
+            "primary_metric": "precision",
+            "precision": 0.85,
+            "recorded_at": "2026-03-26T10:00:00Z",
+            "eval_command": "echo test",
+        }))
+
+        bundle = load_context_bundle(
+            repo_path=tmp_path,
+            question="test",
+            evolution_dir=evo_dir,
+            baseline_path=bp,
+            max_lesson_cycles=0,
+            enable_cross_project=True,
+            global_evolution_dir=global_dir,
+        )
+
+        merged = bundle["prior_lessons"] + bundle["rejected_approaches"]
+        assert len(merged) == 12
+        assert sum(1 for item in merged if item.startswith("Global lesson")) == 1
 
     def test_source_repo_field_backward_compat(self):
         """LessonEntry without source_repo loads correctly."""

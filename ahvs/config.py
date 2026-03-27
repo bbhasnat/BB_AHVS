@@ -25,7 +25,7 @@ class AHVSConfig:
     # ── Cycle settings ────────────────────────────────────────────────────
     run_dir: Path = field(default=None)  # type: ignore[assignment]
     max_hypotheses: int = 3  # soft default; hard max enforced at 5
-    max_lesson_cycles: int = 5  # load lessons from last K complete cycles (0 = unlimited)
+    max_lesson_cycles: int = 5  # load lessons from last K recent non-failed cycle IDs (0 = unlimited)
 
     # ── Guards ────────────────────────────────────────────────────────────
     regression_guard_path: Path | None = None

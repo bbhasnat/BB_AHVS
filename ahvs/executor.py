@@ -1257,6 +1257,8 @@ def _execute_context_load(
             evolution_dir=config.evolution_dir,
             baseline_path=config.baseline_path,
             max_lesson_cycles=config.max_lesson_cycles,
+            global_evolution_dir=config.global_evolution_dir,
+            enable_cross_project=config.enable_cross_project,
         )
     except (FileNotFoundError, ValueError) as exc:
         return AHVSStageResult(

@@ -76,5 +76,5 @@ ahvs/
 ## Tests
 
 ```bash
-pytest tests/test_ahvs.py -v   # 229 tests
+pytest tests/test_ahvs.py -v   # 274 tests
 ```
