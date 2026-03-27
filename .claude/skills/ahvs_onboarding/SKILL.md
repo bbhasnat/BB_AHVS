@@ -182,9 +182,29 @@ Identify all tunable parameters in the codebase and encode them so AHVS generate
 
 This ensures AHVS hypotheses propose real algorithmic changes (post selection, threshold tuning, scoring logic) not just prompt rewrites.
 
-### Phase 6: Write and Verify Artifacts
+### Phase 6: Write Artifacts and Register in AHVS
 
-Create `.ahvs/` directory, then write:
+Create `.ahvs/` directory, then write the artifacts below.
+
+**After writing `.ahvs/baseline_metric.json`**, register the repo in the global AHVS registry so future sessions can refer to it by short name:
+
+```python
+from ahvs.registry import register
+register(
+    repo_path,
+    primary_metric="<metric_name>",
+    baseline_value=<numeric_value>,
+)
+```
+
+Or equivalently from the shell:
+```bash
+python -c "from ahvs.registry import register; register('$REPO_PATH', primary_metric='$METRIC', baseline_value=$VALUE)"
+```
+
+This writes to `~/.ahvs/registry.json`, allowing the CLI to accept `--repo <short_name>` in future sessions (see `ahvs --list-repos`).
+
+Write:
 
 **Required: `.ahvs/baseline_metric.json`**
 
@@ -246,8 +266,10 @@ Present a clear status block:
 **Warnings:**
 - (any caveats)
 
+**Registered as:** <short_name> (use `ahvs --list-repos` to verify)
+
 **Next step:**
-ahvs --repo /path/to/repo --question "..."
+ahvs --repo <short_name> --question "..."
 ```
 
 ## Git Mode Policy

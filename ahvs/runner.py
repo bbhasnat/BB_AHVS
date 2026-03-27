@@ -216,6 +216,13 @@ def execute_ahvs_cycle(
     elif done_count == len(AHVS_STAGE_SEQUENCE):
         print(f"[AHVS] Full cycle complete. See: {cycle_dir / 'cycle_summary.json'}")
 
+    # Update repo registry with latest cycle
+    try:
+        from ahvs.registry import update_last_cycle
+        update_last_cycle(config.repo_path, cycle_dir.name)
+    except Exception:  # noqa: BLE001
+        pass  # Non-fatal — registry is convenience, not critical
+
     # Promote qualifying lessons to global cross-project store
     if config.enable_cross_project and done_count == len(stages_to_run):
         try:

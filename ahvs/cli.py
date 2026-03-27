@@ -17,10 +17,17 @@ def cmd_ahvs(args: argparse.Namespace) -> int:
     from ahvs.runner import execute_ahvs_cycle, read_ahvs_checkpoint
     from ahvs.stages import AHVSStage, StageStatus
 
-    repo_path = _Path(args.repo).resolve()
-    if not repo_path.exists():
-        print(f"Error: repo path does not exist: {repo_path}", file=sys.stderr)
+    from ahvs.registry import resolve as _resolve_repo
+
+    resolved = _resolve_repo(args.repo)
+    if resolved is None:
+        print(
+            f"Error: '{args.repo}' is not a valid path and not a registered AHVS repo.\n"
+            f"  Hint: run 'ahvs list' to see registered repos, or pass a full path.",
+            file=sys.stderr,
+        )
         return 1
+    repo_path = resolved
 
     # Resolve domain pack paths (--domain overrides --prompts/--skill-registry)
     _prompts_path = _Path(args.prompts).resolve() if args.prompts else None
@@ -263,6 +270,36 @@ def _apply_best(config: "AHVSConfig") -> int:
     return 0
 
 
+def _cmd_list_repos() -> int:
+    """Print all registered AHVS repos."""
+    from ahvs.registry import list_repos
+
+    repos = list_repos()
+    if not repos:
+        print("No repos registered. Onboard a repo first with the ahvs_onboarding skill.")
+        return 0
+
+    for name, info in repos.items():
+        metric = info.get("primary_metric", "?")
+        value = info.get("baseline_value", "?")
+        last = info.get("last_cycle", "none")
+        path = info.get("path", "?")
+        print(f"  {name:20s}  metric={metric}={value}  last_cycle={last}")
+        print(f"  {'':20s}  path={path}")
+    return 0
+
+
+def _cmd_unregister(name: str) -> int:
+    """Remove a repo from the AHVS registry."""
+    from ahvs.registry import unregister
+
+    if unregister(name):
+        print(f"Unregistered '{name}' from AHVS registry.")
+        return 0
+    print(f"'{name}' is not in the registry.", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ahvs",
@@ -270,11 +307,19 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     parser.add_argument(
-        "--repo", "-r", required=True,
-        help="Path to target repository to improve",
+        "--list-repos", action="store_true",
+        help="List all registered AHVS repos and exit",
     )
     parser.add_argument(
-        "--question", "-q", required=True,
+        "--unregister",
+        help="Remove a repo from the registry by name and exit",
+    )
+    parser.add_argument(
+        "--repo", "-r",
+        help="Path or registered short name of target repository (see --list-repos)",
+    )
+    parser.add_argument(
+        "--question", "-q",
         help="Cycle question (e.g. 'How can we improve answer_relevance by 5%%?')",
     )
     parser.add_argument(
@@ -385,6 +430,19 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+
+    # Short-circuit commands that don't need --repo / --question
+    if args.list_repos:
+        return _cmd_list_repos()
+    if args.unregister:
+        return _cmd_unregister(args.unregister)
+
+    # Validate required args for cycle run
+    if not args.repo:
+        parser.error("--repo is required for running a cycle (or use --list-repos)")
+    if not args.question:
+        parser.error("--question is required for running a cycle")
+
     return cmd_ahvs(args)
 
 

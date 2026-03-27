@@ -5,7 +5,7 @@
 AHVS (Adaptive Hypothesis Validation System) is a standalone 8-stage cyclic pipeline that autonomously improves LLM/RAG systems. Given a target repo and a question like "How can we improve answer_relevance by 5%?", it generates hypotheses, tests them in isolated git worktrees, measures results against a baseline metric, and archives lessons for future cycles.
 
 **Package:** `ahvs` (installed via `pip install -e .` from this repo)
-**CLI:** `ahvs --repo <path> --question "..." --provider <provider> --model <model> --api-key-env <KEY>`
+**CLI:** `ahvs --repo <path-or-name> --question "..." --provider <provider> --model <model> --api-key-env <KEY>`
 **Python API:** `from ahvs import AHVSConfig, execute_ahvs_cycle, AHVSStage, HypothesisResult`
 
 ## AHVS Memory Discipline (CRITICAL)
@@ -43,6 +43,7 @@ All AHVS project-specific memory lives in the **target repo**, not in Claude's m
 ```
 ahvs/
 ├── cli.py               # Standalone CLI entry point
+├── registry.py           # Repo registry (~/.ahvs/registry.json)
 ├── config.py             # AHVSConfig dataclass
 ├── executor.py           # 8 stage handlers (largest file, ~2500 lines)
 ├── runner.py             # execute_ahvs_cycle() orchestration loop
@@ -76,5 +77,5 @@ ahvs/
 ## Tests
 
 ```bash
-pytest tests/test_ahvs.py -v   # 274 tests
+pytest tests/test_ahvs.py -v   # 284 tests
 ```

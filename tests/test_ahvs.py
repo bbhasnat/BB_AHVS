@@ -4715,3 +4715,166 @@ class TestGlobalEvolutionStore:
         promoted = gstore.promote_lessons(local, "myrepo")
         assert promoted == 1
         assert global_dir.exists()
+
+
+# ── Registry tests ──────────────────────────────────────────────────────────
+
+
+class TestRepoRegistry:
+    """Tests for ahvs.registry — persistent repo name→path mapping."""
+
+    def test_register_and_resolve(self, tmp_path, monkeypatch):
+        """Register a repo by path, resolve it by short name."""
+        from ahvs import registry
+
+        reg_dir = tmp_path / "ahvs_home"
+        reg_path = reg_dir / "registry.json"
+        monkeypatch.setattr(registry, "_REGISTRY_DIR", reg_dir)
+        monkeypatch.setattr(registry, "_REGISTRY_PATH", reg_path)
+
+        repo = tmp_path / "my_project"
+        repo.mkdir()
+
+        name = registry.register(repo, primary_metric="accuracy", baseline_value=0.85)
+        assert name == "my_project"
+
+        resolved = registry.resolve("my_project")
+        assert resolved == repo.resolve()
+
+    def test_resolve_full_path_bypasses_registry(self, tmp_path, monkeypatch):
+        """A valid filesystem path is returned directly without registry lookup."""
+        from ahvs import registry
+
+        reg_dir = tmp_path / "ahvs_home"
+        monkeypatch.setattr(registry, "_REGISTRY_DIR", reg_dir)
+        monkeypatch.setattr(registry, "_REGISTRY_PATH", reg_dir / "registry.json")
+
+        repo = tmp_path / "some_repo"
+        repo.mkdir()
+
+        resolved = registry.resolve(str(repo))
+        assert resolved == repo.resolve()
+
+    def test_resolve_unknown_name_returns_none(self, tmp_path, monkeypatch):
+        """An unregistered name that isn't a path returns None."""
+        from ahvs import registry
+
+        reg_dir = tmp_path / "ahvs_home"
+        monkeypatch.setattr(registry, "_REGISTRY_DIR", reg_dir)
+        monkeypatch.setattr(registry, "_REGISTRY_PATH", reg_dir / "registry.json")
+
+        assert registry.resolve("nonexistent_repo") is None
+
+    def test_register_preserves_existing_fields(self, tmp_path, monkeypatch):
+        """Re-registering a repo preserves fields not supplied in the update."""
+        from ahvs import registry
+
+        reg_dir = tmp_path / "ahvs_home"
+        reg_path = reg_dir / "registry.json"
+        monkeypatch.setattr(registry, "_REGISTRY_DIR", reg_dir)
+        monkeypatch.setattr(registry, "_REGISTRY_PATH", reg_path)
+
+        repo = tmp_path / "proj"
+        repo.mkdir()
+
+        registry.register(repo, primary_metric="f1", baseline_value=0.7)
+        # Re-register without baseline_value
+        registry.register(repo, primary_metric="f1")
+
+        repos = registry.list_repos()
+        assert repos["proj"]["baseline_value"] == 0.7
+
+    def test_update_last_cycle(self, tmp_path, monkeypatch):
+        """update_last_cycle writes cycle ID to existing registry entry."""
+        from ahvs import registry
+
+        reg_dir = tmp_path / "ahvs_home"
+        reg_path = reg_dir / "registry.json"
+        monkeypatch.setattr(registry, "_REGISTRY_DIR", reg_dir)
+        monkeypatch.setattr(registry, "_REGISTRY_PATH", reg_path)
+
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        registry.register(repo)
+
+        registry.update_last_cycle(repo, "20260327_120000")
+        repos = registry.list_repos()
+        assert repos["proj"]["last_cycle"] == "20260327_120000"
+
+    def test_update_last_cycle_auto_registers(self, tmp_path, monkeypatch):
+        """update_last_cycle registers the repo if not already registered."""
+        from ahvs import registry
+
+        reg_dir = tmp_path / "ahvs_home"
+        reg_path = reg_dir / "registry.json"
+        monkeypatch.setattr(registry, "_REGISTRY_DIR", reg_dir)
+        monkeypatch.setattr(registry, "_REGISTRY_PATH", reg_path)
+
+        repo = tmp_path / "new_proj"
+        repo.mkdir()
+
+        registry.update_last_cycle(repo, "20260327_130000")
+        repos = registry.list_repos()
+        assert "new_proj" in repos
+        assert repos["new_proj"]["last_cycle"] == "20260327_130000"
+
+    def test_unregister(self, tmp_path, monkeypatch):
+        """unregister removes a repo from the registry."""
+        from ahvs import registry
+
+        reg_dir = tmp_path / "ahvs_home"
+        reg_path = reg_dir / "registry.json"
+        monkeypatch.setattr(registry, "_REGISTRY_DIR", reg_dir)
+        monkeypatch.setattr(registry, "_REGISTRY_PATH", reg_path)
+
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        registry.register(repo)
+
+        assert registry.unregister("proj") is True
+        assert registry.unregister("proj") is False
+        assert "proj" not in registry.list_repos()
+
+    def test_list_repos_empty(self, tmp_path, monkeypatch):
+        """list_repos returns empty dict when no registry exists."""
+        from ahvs import registry
+
+        reg_dir = tmp_path / "ahvs_home"
+        monkeypatch.setattr(registry, "_REGISTRY_DIR", reg_dir)
+        monkeypatch.setattr(registry, "_REGISTRY_PATH", reg_dir / "registry.json")
+
+        assert registry.list_repos() == {}
+
+    def test_custom_name_override(self, tmp_path, monkeypatch):
+        """register with explicit name uses that instead of dirname."""
+        from ahvs import registry
+
+        reg_dir = tmp_path / "ahvs_home"
+        reg_path = reg_dir / "registry.json"
+        monkeypatch.setattr(registry, "_REGISTRY_DIR", reg_dir)
+        monkeypatch.setattr(registry, "_REGISTRY_PATH", reg_path)
+
+        repo = tmp_path / "rnd_user_cohort" / "autoqa"
+        repo.mkdir(parents=True)
+
+        name = registry.register(repo, name="autoqa-prod")
+        assert name == "autoqa-prod"
+
+        resolved = registry.resolve("autoqa-prod")
+        assert resolved == repo.resolve()
+
+    def test_resolve_stale_path_returns_none(self, tmp_path, monkeypatch):
+        """If registered path no longer exists, resolve returns None."""
+        from ahvs import registry
+
+        reg_dir = tmp_path / "ahvs_home"
+        reg_path = reg_dir / "registry.json"
+        monkeypatch.setattr(registry, "_REGISTRY_DIR", reg_dir)
+        monkeypatch.setattr(registry, "_REGISTRY_PATH", reg_path)
+
+        repo = tmp_path / "vanished"
+        repo.mkdir()
+        registry.register(repo)
+        repo.rmdir()
+
+        assert registry.resolve("vanished") is None

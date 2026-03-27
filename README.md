@@ -456,7 +456,9 @@ ahvs [options]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--repo`, `-r` | *(required)* | Path to target repository |
+| `--repo`, `-r` | *(required)* | Path or registered short name of target repository (see `--list-repos`) |
+| `--list-repos` | off | List all registered AHVS repos and exit |
+| `--unregister` | none | Remove a repo from the registry by name and exit |
 | `--question`, `-q` | *(required)* | The cycle question (what to improve) |
 | `--max-hypotheses` | `3` | How many hypotheses to generate (max 5) |
 | `--max-lesson-cycles` | `5` | Load lessons from last K recent non-failed cycle IDs (0 = unlimited) |
@@ -690,6 +692,27 @@ During Stage 2, local lessons are loaded first (up to 12); global lessons only f
 
 At Stage 2 (`AHVS_CONTEXT_LOAD`), AHVS queries the top 12 lessons from the store using the stage name `"ahvs_execution"` — the same name used when writing lessons at Stage 7. This ensures the EvolutionStore's 2x relevance boost applies correctly to AHVS-specific lessons. Lessons with severity `"info"` are treated as positive outcomes; those with `"warning"` or `"error"` are surfaced as rejected approaches. The LLM sees both what has worked and what has been ruled out, producing increasingly targeted hypotheses over time.
 
+### Repo registry
+
+AHVS maintains a **global repo registry** at `~/.ahvs/registry.json` that maps short names to filesystem paths. This enables the CLI to accept `--repo autoresearch` instead of requiring a full path, and ensures future sessions can reliably locate onboarded repos without filesystem searching.
+
+The registry is updated automatically:
+- **During onboarding** — the `ahvs_onboarding` skill registers the repo after writing `baseline_metric.json`
+- **After each cycle** — `runner.py` writes the `last_cycle` ID back to the registry entry
+
+```bash
+# List all registered repos
+ahvs --list-repos
+
+# Run a cycle using a short name
+ahvs --repo autoresearch --question "How can we improve test_accuracy?"
+
+# Remove a repo from the registry
+ahvs --unregister old-project
+```
+
+Each entry stores the repo path, primary metric, baseline value, onboarding timestamp, and the last cycle ID. The registry is user-local (`~/.ahvs/`), not checked into any repo.
+
 ### Enriched onboarding context
 
 Stage 2 also forwards enriched fields from `baseline_metric.json` into the hypothesis-generation prompt. These fields — `optimization_goal`, `regression_floor`, `constraints`, `system_levers`, `prior_experiments`, `notes` — are written during onboarding (see [Section 6.1](#61-baseline-metric-file)) and appear in the prompt under "Operator Context". This gives the LLM richer intent signals without additional inference calls.
@@ -884,6 +907,7 @@ ahvs/
 ├── executor.py              # 8 stage handlers + execute_ahvs_stage() dispatcher
 ├── runner.py                # execute_ahvs_cycle() — outer orchestration loop
 ├── evolution.py             # EvolutionStore — cross-cycle memory persistence
+├── registry.py              # Repo registry (~/.ahvs/registry.json)
 ├── cli.py                   # CLI entry point (ahvs command)
 ├── domain_packs/            # Domain-specific prompt + skill overrides
 │   ├── ml_prompts.yaml      # Traditional ML hypothesis prompts (--domain ml)
@@ -944,6 +968,18 @@ ahvs/
             │   └── <generated files>
             └── H2/
 ```
+
+### User-local `~/.ahvs/` directory
+
+```
+~/.ahvs/
+├── registry.json               # Repo registry: name→path mapping (auto-updated)
+└── global/
+    └── evolution/              # GlobalEvolutionStore: cross-project lessons
+        └── lessons.jsonl
+```
+
+The registry is updated during onboarding and after each cycle. It is user-local and never checked into any repo.
 
 ### Memory model
 
@@ -1229,7 +1265,7 @@ If either the original or partial file has syntax errors, the merge falls back g
 
 ### Test coverage
 
-274 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, memory management (cycle cleanup, lesson compaction, eager writes, cycle-status filtering, structured outcomes, semantic deduplication, verification feedback, friction log summarization, memory file lifecycle, historical digest, cross-project learning), and regression tests for all known framework bugs.
+284 unit and integration tests in `tests/test_ahvs.py` covering stage orchestration, config validation, health checks, skill matching, worktree lifecycle, eval execution, result serialization, AST splicing, memory management (cycle cleanup, lesson compaction, eager writes, cycle-status filtering, structured outcomes, semantic deduplication, verification feedback, friction log summarization, memory file lifecycle, historical digest, cross-project learning), repo registry, and regression tests for all known framework bugs.
 
 Tests work from a fresh checkout — no `pip install -e .` or `PYTHONPATH` required (`conftest.py` bootstraps the import path):
 
