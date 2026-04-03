@@ -184,8 +184,10 @@ ahvs genesis \
 **Implementation:**
 - Add `cmd_genesis()` function in `cli.py` (similar pattern to existing `cmd_ahvs()`)
 - Parse arguments: `--problem`, `--data`, `--target-metric`, `--output-dir`, `--solver`
+- **`--output-dir` is required** — genesis never auto-generates a default path. The user must always explicitly provide the target directory or git repo path.
 - Load solver from registry
 - Call `solver.solve(...)`
+- `git init` + initial commit in the output directory (so AHVS can use worktrees), unless it's already a git repo
 - Write `.ahvs/baseline_metric.json` in the output directory
 - Register the new project in `~/.ahvs/registry.json`
 - Print success message with next-step instructions
@@ -201,7 +203,24 @@ The adapter must produce an `eval_command` that AHVS can run in future cycles. T
 - This script loads the trained model, runs inference on test data, prints the metric
 - `eval_command` = `python eval_metric.py`
 
-### Task 2.3: Test End-to-End (Genesis → AHVS Cycle)
+### Task 2.3: Create Genesis Skill (`.claude/skills/ahvs_genesis/`)
+
+Create a Claude Code skill at `.claude/skills/ahvs_genesis/` that provides an interactive, conversational interface to genesis. Same pattern as `ahvs_onboarding` and `ahvs_multiagent`.
+
+The skill:
+1. Asks the user for: problem description, data path, target metric, output directory
+2. **Output directory is always required** — never suggests or auto-generates a default
+3. Validates inputs (data file exists, output dir is writable, etc.)
+4. Calls the genesis pipeline (solver routing → KD adapter → package result)
+5. Reports: project path, baseline metric, trained model path, next-step command
+
+**Invocation:** `/ahvs_genesis` in Claude Code
+
+**Design principle:** Genesis is a step-by-step tool. The user invokes genesis first, inspects the result, then decides when to run AHVS optimization. The skill does NOT auto-chain into AHVS cycles.
+
+### Task 2.4: Test End-to-End (Genesis → AHVS Cycle)
+
+Step-by-step usage (the primary workflow):
 
 ```bash
 # Step 1: Genesis creates a new project
@@ -209,19 +228,22 @@ ahvs genesis --problem "sentiment classification" \
   --data emails.csv --target-metric f1_weighted \
   --output-dir /tmp/my_classifier
 
-# Step 2: Normal AHVS cycle improves it
+# Step 2: User inspects the result
+cat /tmp/my_classifier/.ahvs/baseline_metric.json
+
+# Step 3: Normal AHVS cycle improves it (when user is ready)
 ahvs --repo /tmp/my_classifier \
   --question "improve f1_weighted to 0.85" \
   --domain ml
 ```
 
-**Acceptance:** Step 1 produces a project with baseline_metric.json. Step 2 runs a normal AHVS optimization cycle against that baseline.
+**Acceptance:** Step 1 produces a project with baseline_metric.json and a git repo. Step 3 runs a normal AHVS optimization cycle against that baseline.
 
 ---
 
-## Phase 3: Genesis as Optional Pre-Stage
+## Phase 3: Genesis as Optional Pre-Stage (Convenience Only)
 
-**Goal:** Single-command experience: `ahvs --problem ... --question ...` creates + optimizes. Minimal changes to AHVS core.
+**Goal:** Optional single-command experience for users who want `ahvs --problem ... --question ...` to create + optimize in one invocation. This is a convenience layer — not the primary workflow. Genesis is designed for step-by-step use (Phase 2).
 
 ### Task 3.1: Add `--problem` and `--data` Flags to Main CLI
 
@@ -229,6 +251,8 @@ In `cli.py:cmd_ahvs()`, add optional flags:
 - `--problem` — natural language problem description
 - `--data` — path to input data
 - `--solver` — which solver to use (default: auto-detect via router)
+
+**Note:** `--output-dir` (or `--repo`) is still required. These flags do not change the requirement that the user provides the path.
 
 ### Task 3.2: Add Genesis Logic Before Cycle Start
 
@@ -390,7 +414,7 @@ Phases 2 and 4 can be developed in parallel after Phase 1 is complete.
 | Phase | Files Created | Files Modified |
 |---|---|---|
 | 1 | `ahvs/genesis/__init__.py`, `contract.py`, `registry.py`, `router.py`, `solvers/__init__.py`, `solvers/kd_classifier.py`, `solvers.yaml` | None |
-| 2 | None | `ahvs/cli.py` (add `cmd_genesis`) |
+| 2 | `.claude/skills/ahvs_genesis/` (skill files) | `ahvs/cli.py` (add `cmd_genesis`) |
 | 3 | None | `ahvs/cli.py` (add `--problem`, `--data` flags) |
 | 4 | `ahvs/domain_packs/kd_prompts.yaml`, `kd_skills.yaml` | `ahvs/executor.py` (add KD execution), `ahvs/cli.py` (add `--domain kd`) |
 | 5 | None | `ahvs/evolution.py` (extend LessonEntry), `ahvs/context_loader.py` (KD digest), `ahvs/runner.py` (KD promotion) |
