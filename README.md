@@ -1199,9 +1199,20 @@ You can detach from the tmux session (`Ctrl-b d`) and re-attach later (`tmux att
 
 ### Roadmap / TODOs
 
-AHVS already has a strong generic execution contract: repo + baseline metric + `eval_command` + isolated worktrees. That foundation should stay stable. The next work falls into two buckets: execution scalability and domain expansion.
+AHVS already has a strong generic execution contract: repo + baseline metric + `eval_command` + isolated worktrees. That foundation should stay stable. The next work falls into six categories.
 
-#### Execution scalability
+#### UX & distribution *(priority)*
+
+1. **CLI + GUI hypothesis add/insert/edit** *(priority)*
+   Allow operators to manually add, insert, or edit hypotheses via CLI flags and the browser-based GUI before execution — not just select/deselect from LLM-generated candidates. This is the highest-priority UX improvement: it unblocks human-in-the-loop workflows where domain experts want to inject their own ideas alongside LLM-generated ones.
+2. **Installable plugin / skills / installer**
+   Develop an installable package (pip, brew, or standalone installer) with bundled skills so that others can install and use AHVS without cloning the repo. Expose as much functionality as possible through the installer — onboarding, cycle execution, results viewer.
+3. **Package & distribution**
+   pip extras, Docker image, one-command setup. The goal is `pip install ahvs` or `docker run ahvs` with zero manual configuration beyond a target repo path and eval command.
+4. **Browser GUI for manual lesson/memory cleanup**
+   Add an interactive browser-based GUI (similar to hypothesis selector) that lets the operator inspect, filter, and selectively delete individual lessons from `lessons.jsonl` and memory files from `.ahvs/memory/`. Useful for curating cross-cycle memory when automatic compaction is insufficient.
+
+#### Execution & runtime
 
 1. **Parallel hypothesis execution**
    Hypotheses currently run sequentially. Parallel execution is feasible — Claude Code already runs inside per-hypothesis worktrees (done), so two remaining items are needed:
@@ -1209,22 +1220,48 @@ AHVS already has a strong generic execution contract: repo + baseline metric + `
    - Use `concurrent.futures` or `asyncio.gather` over the hypothesis list
 2. **Improve unattended throughput**
    `save_results` already supports merge-by-ID accumulation, so batch and unattended execution should benefit once parallelism is in place. Multi-agent supervised mode benefits less because the observer verifies between hypotheses.
+3. **Jupyter notebook-style execution**
+   When execution scripts encounter errors, the current approach reruns the entire script. A notebook-style execution model would allow fixing only the failing cell and resuming from that point — reducing iteration time and preserving expensive intermediate state (loaded models, processed data).
+4. **Multi-agent decomposition**
+   Decompose the current agent architecture into more agents with narrower responsibilities — each agent becomes smarter and faster at its specific task. For example, separate plan-validator, code-reviewer, and test-runner agents instead of a single monolithic executor. This improves both speed (parallel specialist agents) and quality (each agent is deeply focused).
+5. **LLM call deduplication / semantic cache** *(priority)*
+   AHVS frequently sends the exact same prompt + input + model combination across cycles and hypotheses — identical context-loading calls, repeated hypothesis-generation prompts, duplicate eval-interpretation requests. This is a major waste of money and time. Implement a content-addressed cache (hash of model + prompt + input → cached response) that short-circuits repeated calls. Options include a local SQLite/disk cache with TTL, integration with a semantic caching layer (e.g., GPTCache, LiteLLM proxy cache), or an LRU in-memory cache within a session. The cache should be invalidated when the underlying data changes (new lessons, updated baseline) but reused aggressively when inputs are identical. This is one of the highest-impact cost optimizations available.
 
 #### Domain expansion
 
 The `--domain` flag and YAML-based domain packs (`ahvs/domain_packs/`) provide the adapter mechanism. Two domain packs are available: `llm` (default, LLM/RAG optimization) and `ml` (traditional ML — classifiers, regressors, NLP, CV, time series, etc.). For specialized tool chains (e.g., Hugging Face Trainer, torchvision augmentation), use `--skill-registry` with a project-specific YAML. Remaining work:
 
 1. **Multi-metric optimization** — Preserve the current primary-metric contract, but add first-class support for Pareto-optimal selection across multiple metrics (e.g., precision *and* recall, accuracy *and* latency)
-2. **Data analytics domain (exploratory)** — Investigate whether AHVS can drive data-focused hypothesis cycles: dataset selection, feature subset optimization, preprocessing pipeline tuning, data augmentation experiments. These fit the current loop well when there's a clear downstream metric (e.g., "which cleaning pipeline gives the best F1?"). Open-ended exploration (EDA, pattern discovery) would need a different output contract since AHVS currently requires a single numeric metric. A `data_prompts.yaml` pack would be the first step; structural changes only if prompt-level framing proves insufficient.
-3. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression, data preprocessing) so users can see the full onboarding → cycle → results flow
+2. **Complex algorithmic tasks** — Extend AHVS to narrative improvement algorithms, knowledge graph improvement procedures, and other algorithmic-style hypothesis validation. These are structurally similar to ML optimization but operate on graph structures and text quality metrics. Align with existing autonomous research tools like AI Scientist / AI Scholar for structured experimental workflows.
+3. **Data analytics domain (exploratory)** — Investigate whether AHVS can drive data-focused hypothesis cycles: dataset selection, feature subset optimization, preprocessing pipeline tuning, data augmentation experiments. These fit the current loop well when there's a clear downstream metric (e.g., "which cleaning pipeline gives the best F1?"). Open-ended exploration (EDA, pattern discovery) would need a different output contract since AHVS currently requires a single numeric metric. A `data_prompts.yaml` pack would be the first step; structural changes only if prompt-level framing proves insufficient.
+4. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression, data preprocessing) so users can see the full onboarding → cycle → results flow
+
+#### Platform integration
+
+1. **Databricks integration**
+   Large datasets live in the Databricks datalake and are impractical to download. AHVS needs to run natively on Databricks — via Databricks Asset Bundles or workflow jobs — so it can exploit datalake data directly on the platform for hypothesis execution and evaluation.
+2. **Knowledge distillation integration**
+   KD becomes a first-class AHVS hypothesis type (`knowledge_distillation`). AHVS wraps the KD pipeline, discovers optimal configurations (prompt strategy, model architecture, DSPy mode), and accumulates lessons across KD runs. See [Deep Analysis: AHVS × KD](Deep_Analysis_AHVS_KD.md) for the full integration architecture.
+3. **MLOps export** — Push cycle results to W&B, MLflow, or Comet for experiment tracking, model registry integration, and team-wide visibility.
+4. **GitHub CI integration** — PR-triggered AHVS cycles, eval-quality gates, Phoenix traces for observability.
+5. **MCP server for AHVS** — Expose AHVS as a Model Context Protocol service so that other LLM agents and tools can invoke AHVS cycles, query the evolution store, and access lessons programmatically.
+
+#### Intelligence & evolution
+
+Several ideas from NousResearch's [Hermes Agent Self-Evolution](https://github.com/NousResearch/hermes-agent-self-evolution) pipeline (DSPy GEPA, LLM-as-judge scoring, synthetic eval generation) could strengthen AHVS:
+
+1. **DSPy/GEPA prompt evolution** — Instead of one-shot LLM rewrites, use DSPy GEPA to iteratively evolve prompts/configs over N generations with trace-informed mutations. This gives structured exploration of the prompt space rather than single-sample guesses. Integrate as an optional `--optimizer gepa` flag on prompt-type hypotheses.
+2. **LLM-as-judge secondary evaluator** — When `eval_command` is slow or expensive (e.g., full RAG pipeline runs), use a fast LLM-judge heuristic for intermediate hypothesis filtering, reserving the real eval for final holdout comparison. This could dramatically reduce eval cost per cycle.
+3. **AutoResearch** — Inject literature-grounded priors into hypothesis generation so cycles start from published best practices rather than cold-start guesses.
+4. **Synthetic eval dataset generation** — For repos that lack a formal eval harness, auto-generate train/val/holdout test cases from the repo's README, docstrings, and baseline metric description. This lowers the onboarding barrier for repos without existing test suites.
+5. **OpenClaw / PaperClip-style advanced capabilities** — Autonomous recursive self-improvement beyond a single cycle, where AHVS applies hypothesis-driven improvement to its own strategies and hypothesis templates.
+6. **Constraint gating for text artifacts** — Adopt size limits and growth bounds (e.g., max 15KB, max 2× baseline) for evolved prompts/configs to prevent unbounded prompt bloat across AHVS cycles.
 
 #### Memory management *(mostly complete)*
 
 The core memory management overhaul is implemented (see [docs/memory_management_system.md](docs/memory_management_system.md)): structured outcome fields on lessons, two-phase semantic deduplication, Stage 8 verification feedback, friction log summarization, session memory lifecycle (stale marking + archival), historical digest for context window expansion, and cross-project learning via GlobalEvolutionStore. Remaining items:
 
-1. **Browser GUI for manual lesson/memory cleanup**
-   Add an interactive browser-based GUI (similar to hypothesis selector) that lets the operator inspect, filter, and selectively delete individual lessons from `lessons.jsonl` and memory files from `.ahvs/memory/`. Useful for curating cross-cycle memory when automatic compaction is insufficient.
-2. **LLM-based lesson summarization**
+1. **LLM-based lesson summarization**
    Periodically consolidate clusters of related lessons into summary entries (e.g., "5 threshold-tweak hypotheses tried across cycles X-Y, max +0.8% improvement") instead of keeping every raw entry. Reduces prompt token usage while preserving signal.
 
 ### Browser-based hypothesis selector
