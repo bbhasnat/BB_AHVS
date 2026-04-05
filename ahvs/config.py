@@ -43,6 +43,7 @@ class AHVSConfig:
     llm_api_key: str = ""
     llm_model: str = "claude-opus-4-6"
     llm_api_key_env: str = "ANTHROPIC_API_KEY"
+    cache_enabled: bool = True  # LLM response cache (--no-cache to disable)
 
     # ── Memory lifecycle ──────────────────────────────────────────────
     memory_stale_days: int = 60      # prepend [STALE] marker to old memory files
@@ -126,4 +127,5 @@ class AHVSConfig:
             acp_session_name=getattr(args, "acp_session_name", "ahvs") or "ahvs",
             acp_timeout_sec=getattr(args, "acp_timeout_sec", 1800) or 1800,
             eval_timeout_sec=getattr(args, "eval_timeout_sec", 600) or 600,
+            cache_enabled=not getattr(args, "no_cache", False),
         )

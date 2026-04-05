@@ -22,6 +22,7 @@ AHVS is a standalone cyclic hypothesis-validation pipeline that autonomously gen
 14. [Advanced Usage](#14-advanced-usage)
     - [Model Selection Strategy](#model-selection-strategy)
     - [Budget Planning for Experiments](#budget-planning-for-experiments)
+    - [LLM Response Cache](#llm-response-cache)
     - [Prompt Engineering Tips](#prompt-engineering-tips)
     - [Multi-Agent Execution](#multi-agent-execution-with-claude-code-agent-teams)
     - [Roadmap / TODOs](#roadmap--todos)
@@ -55,7 +56,7 @@ AHVS is a self-contained package with no external framework dependencies. Its co
 |-----------|--------|---------|
 | **Claude Code** | `ahvs.executor` | Implements hypotheses via Claude Code CLI (`claude -p`) |
 | **EvolutionStore** | `ahvs.evolution` | Cross-cycle memory — persists lessons across cycles |
-| **LLM Client** | `ahvs.llm` | Provider-agnostic LLM client factory (Anthropic, OpenAI, OpenRouter, DeepSeek, ACP) |
+| **LLM Client** | `ahvs.llm` | Provider-agnostic LLM client factory (Anthropic, OpenAI, OpenRouter, DeepSeek, ACP) with content-addressable response cache |
 | **Stage Pipeline** | `ahvs.stages`, `ahvs.executor`, `ahvs.runner` | 8-stage cycle orchestration with checkpoint/resume |
 | **Hypothesis Worktree** | `ahvs.worktree` | Git worktree lifecycle, file application, and AST-based splice |
 | **Prompt Manager** | `ahvs.prompts` | Stage prompts with YAML overrides |
@@ -481,6 +482,7 @@ ahvs [options]
 | `--acp-timeout` | `1800` | ACP per-prompt timeout in seconds (only with `--provider acp`) |
 | `--apply-best` | off | Auto-apply best improving hypothesis patch and update baseline |
 | `--run-dir` | `<repo>/.ahvs/cycles/<ts>` | Override cycle output directory |
+| `--no-cache` | off | Disable LLM response cache (also controllable via `LLM_CACHE_ENABLED=false`) |
 
 ### Split workflow: generate -> GUI select -> execute
 
@@ -912,11 +914,12 @@ ahvs/
 ├── domain_packs/            # Domain-specific prompt + skill overrides
 │   ├── ml_prompts.yaml      # Traditional ML hypothesis prompts (--domain ml)
 │   └── ml_skills.yaml       # ML skill templates (sklearn, optuna, etc.)
-├── llm/                     # LLM client factory
+├── llm/                     # LLM client factory + response cache
 │   ├── __init__.py
 │   ├── client.py            # Provider-agnostic LLM client
 │   ├── anthropic_adapter.py # Anthropic API adapter
-│   └── acp_client.py        # ACP (Agent Communication Protocol) client
+│   ├── acp_client.py        # ACP (Agent Communication Protocol) client
+│   └── cache.py             # Content-addressable LLM response cache (SQLite, SHA-256)
 └── utils/                   # Shared utilities
     ├── __init__.py
     └── thinking_tags.py     # LLM thinking-tag parsing
@@ -1135,6 +1138,26 @@ Before running AHVS cycles, estimate your costs:
 
 A typical improvement campaign runs 5-10 cycles. Budget accordingly — with a strong model at ~$15/M input tokens, a 5-cycle campaign with 3 hypotheses each costs roughly $5-15 in API calls.
 
+### LLM response cache
+
+AHVS caches LLM responses in a per-project SQLite database at `<repo>/.ahvs/.llm_cache/responses.db`. The cache key is a SHA-256 hash of the full call parameters (model, messages, system prompt, max_tokens, temperature), so any change in input produces a different key.
+
+**What gets cached:** All 3 orchestration LLM calls (hypothesis generation, validation planning, report writing) are cached automatically. ACP calls are excluded because they maintain stateful sessions.
+
+**When it helps most:** Multi-cycle campaigns where you re-run with the same question and baseline — hypothesis generation hits 100% cache on the prompt-identical calls. Downstream-only changes (new skill registry, different `--max-hypotheses`) that don't alter the LLM input also hit cache.
+
+**Controls:**
+
+| Control | Effect |
+|---------|--------|
+| `--no-cache` | Disable cache for this run |
+| `LLM_CACHE_ENABLED=false` | Disable via environment variable |
+| `LLM_CACHE_TTL_HOURS=168` | Auto-expire entries after N hours (default: no expiry) |
+| `LLM_CACHE_STORE_MESSAGES=true` | Store input messages in cache (default: false for PII safety) |
+| `rm -rf <repo>/.ahvs/.llm_cache/` | Clear cache entirely |
+
+**Safety:** Only successful, non-truncated responses are cached (`finish_reason == "stop"` and non-empty content). Errors, rate-limit responses, and truncated outputs are never cached.
+
 ### Prompt engineering tips
 
 - Keep `--question` specific and metric-anchored: *"Improve answer\_relevance from 0.74 to above 0.78 by improving the retrieval step"* generates better hypotheses than *"make the system better"*.
@@ -1224,8 +1247,7 @@ AHVS already has a strong generic execution contract: repo + baseline metric + `
    When execution scripts encounter errors, the current approach reruns the entire script. A notebook-style execution model would allow fixing only the failing cell and resuming from that point — reducing iteration time and preserving expensive intermediate state (loaded models, processed data).
 4. **Multi-agent decomposition**
    Decompose the current agent architecture into more agents with narrower responsibilities — each agent becomes smarter and faster at its specific task. For example, separate plan-validator, code-reviewer, and test-runner agents instead of a single monolithic executor. This improves both speed (parallel specialist agents) and quality (each agent is deeply focused).
-5. **LLM call deduplication / semantic cache** *(priority)*
-   AHVS frequently sends the exact same prompt + input + model combination across cycles and hypotheses — identical context-loading calls, repeated hypothesis-generation prompts, duplicate eval-interpretation requests. This is a major waste of money and time. Implement a content-addressed cache (hash of model + prompt + input → cached response) that short-circuits repeated calls. Options include a local SQLite/disk cache with TTL, integration with a semantic caching layer (e.g., GPTCache, LiteLLM proxy cache), or an LRU in-memory cache within a session. The cache should be invalidated when the underlying data changes (new lessons, updated baseline) but reused aggressively when inputs are identical. This is one of the highest-impact cost optimizations available.
+5. ~~**LLM call deduplication / semantic cache**~~ **DONE** — Implemented in `ahvs/llm/cache.py`. Content-addressable SQLite cache with SHA-256 keys, WAL mode, TTL support, PII-safe defaults. Wraps all API-based LLM calls transparently via `CachedClientWrapper`. Disable with `--no-cache` or `LLM_CACHE_ENABLED=false`. See [LLM Response Cache](#llm-response-cache) for details.
 
 #### Domain expansion
 

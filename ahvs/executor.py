@@ -86,11 +86,27 @@ def _make_llm_client(config: AHVSConfig) -> Any:
     selection (Anthropic, OpenAI, ACP, etc.) is handled in one place.
     A lightweight shim object bridges AHVSConfig fields to the shape
     expected by the factory.
+
+    When caching is enabled (default), wraps the client in a
+    ``CachedClientWrapper`` that deduplicates identical LLM calls.
+    ACP clients are NOT cached (they maintain stateful sessions).
     """
     from ahvs.llm import create_llm_client
 
     shim = _ahvs_config_to_llm_shim(config)
-    return create_llm_client(shim)
+    client = create_llm_client(shim)
+
+    # Wrap with cache for API-based providers (not ACP — stateful sessions)
+    if config.cache_enabled and config.llm_provider != "acp":
+        from ahvs.llm.cache import LLMCache, CachedClientWrapper, _is_cache_enabled
+
+        if _is_cache_enabled():
+            cache_dir = config.repo_path / ".ahvs" / ".llm_cache"
+            cache = LLMCache(cache_dir)
+            client = CachedClientWrapper(client, cache)
+            logger.info("LLM cache enabled: %s", cache_dir)
+
+    return client
 
 
 class _AcpShim:

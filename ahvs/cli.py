@@ -58,6 +58,7 @@ def cmd_ahvs(args: argparse.Namespace) -> int:
         acp_session_name=getattr(args, "acp_session_name", "ahvs") or "ahvs",
         acp_timeout_sec=getattr(args, "acp_timeout_sec", 1800) or 1800,
         eval_timeout_sec=getattr(args, "eval_timeout_sec", 600) or 600,
+        cache_enabled=not getattr(args, "no_cache", False),
     )
 
     from_stage: AHVSStage | None = None
@@ -427,6 +428,10 @@ def main(argv: list[str] | None = None) -> int:
             "Useful for running only hypothesis generation, then resuming with "
             "--from-stage after GUI selection."
         ),
+    )
+    parser.add_argument(
+        "--no-cache", action="store_true",
+        help="Disable LLM response cache (also controllable via LLM_CACHE_ENABLED=false)",
     )
 
     args = parser.parse_args(argv)

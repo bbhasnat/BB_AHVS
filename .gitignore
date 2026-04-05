@@ -8,3 +8,4 @@ build/
 .env.*
 *.secret
 .code_review/
+.llm_cache/
