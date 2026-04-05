@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -80,7 +81,7 @@ class KDClassifierSolver:
         """
         output = Path(output_dir).resolve()
         data = Path(data_path).resolve()
-        overrides = config_overrides or {}
+        overrides = dict(config_overrides) if config_overrides else {}
         mode = overrides.pop("mode", "pipeline")
 
         if mode not in _VALID_MODES:
@@ -186,34 +187,45 @@ class KDClassifierSolver:
         config_path.write_text(yaml.dump(config, sort_keys=False), encoding="utf-8")
         logger.info("Generated spec: %s, config: %s", spec_path, config_path)
 
-        script = f"""\
+        # Pass parameters via stdin JSON to avoid code injection
+        params = {
+            "kd_path": str(kd_path),
+            "config_path": str(config_path),
+            "spec_path": str(spec_path),
+            "data_path": str(data),
+            "output_dir": str(output),
+        }
+
+        script = """\
 import sys, json
-sys.path.insert(0, {str(kd_path)!r})
+
+params = json.loads(sys.stdin.read())
+sys.path.insert(0, params["kd_path"])
 
 from src.auto_ml.pipeline import run_auto_ml_pipeline
 
 result = run_auto_ml_pipeline(
-    config_path={str(config_path)!r},
-    spec_path={str(spec_path)!r},
-    data_source_path={str(data)!r},
-    root_output_dir={str(output)!r},
+    config_path=params["config_path"],
+    spec_path=params["spec_path"],
+    data_source_path=params["data_path"],
+    root_output_dir=params["output_dir"],
 )
 
-out = {{
+out = {
     "success": result.success,
     "model_path": result.model_path,
     "project_dir": result.project_dir,
     "errors": result.errors,
     "warnings": result.warnings,
-    "metrics": {{}},
-}}
+    "metrics": {},
+}
 
 if result.evaluation_result:
     out["metrics"] = result.evaluation_result
 
 json.dump(out, sys.stdout)
 """
-        return self._exec_subprocess(kd_path, script)
+        return self._exec_subprocess(kd_path, script, stdin_data=json.dumps(params))
 
     # ==================================================================
     # Mode B: Agent (claude-agent-sdk)
@@ -234,36 +246,45 @@ json.dump(out, sys.stdout)
         all pipeline stages autonomously.  After completion, we read
         structured results from .kd_agent_memory.json and output files.
         """
-        prompt = (
-            f"Build a text classifier for this problem: {problem}\n"
-            f"Data file: {data}\n"
-            f"Output directory: {output}\n"
-            f"Target metric to optimize: {target_metric}\n"
-            f"ML backend: tml_classifier (local BERT/DistilBERT)\n"
-            f"Annotation model: {self.default_annotation_model} (never use gpt-4o)\n"
-        )
+        prompt_parts = [
+            f"Build a text classifier for this problem: {problem}",
+            f"Data file: {data}",
+            f"Output directory: {output}",
+            f"Target metric to optimize: {target_metric}",
+            f"ML backend: tml_classifier (local BERT/DistilBERT)",
+            f"Annotation model: {self.default_annotation_model} (never use gpt-4o)",
+        ]
         if overrides.get("classes"):
-            prompt += f"Classes: {overrides['classes']}\n"
-
-        prompt += (
+            prompt_parts.append(f"Classes: {overrides['classes']}")
+        prompt_parts.append(
             "\nRun the FULL pipeline: inspect data → generate spec → "
             "build config → prompt builder → data collector → prompt selector "
             "→ annotator → data analyzer → train TML classifier.\n"
             "Report the final evaluation metrics when done."
         )
 
-        script = f"""\
-import sys, json, asyncio, os
-sys.path.insert(0, {str(kd_path)!r})
-os.chdir({str(kd_path)!r})
+        # Pass all data via stdin JSON to avoid code injection
+        params = {
+            "kd_path": str(kd_path),
+            "prompt": "\n".join(prompt_parts),
+        }
+
+        script = """\
+import sys, json, asyncio, os, re
+
+params = json.loads(sys.stdin.read())
+kd_path = params["kd_path"]
+prompt_text = params["prompt"]
+
+sys.path.insert(0, kd_path)
+os.chdir(kd_path)
 
 from claude_agent_sdk import query, ResultMessage, AssistantMessage
 from src.kd_agent.server import create_kd_agent
 
 async def run():
-    _, options = create_kd_agent(cwd={str(kd_path)!r}, max_turns=50)
-    prompt = {prompt!r}
-    prompt += (
+    _, options = create_kd_agent(cwd=kd_path, max_turns=50)
+    full_prompt = prompt_text + (
         "\\n\\nIMPORTANT: This is SDK mode (non-interactive, one-shot). "
         "Proceed automatically through all pipeline stages without asking for "
         "confirmation or waiting for user input. Do not ask 'Shall I proceed?' — "
@@ -272,7 +293,7 @@ async def run():
 
     full_output = []
     cost = 0.0
-    async for message in query(prompt=prompt, options=options):
+    async for message in query(prompt=full_prompt, options=options):
         if isinstance(message, AssistantMessage):
             full_output.append(message.content)
         elif isinstance(message, ResultMessage):
@@ -285,30 +306,31 @@ async def run():
 
 output_text, cost = asyncio.run(run())
 
-# Try to extract metrics from agent output
-result = {{
+result = {
     "success": True,
     "agent_output": output_text[-3000:],
     "cost_usd": cost,
     "model_path": None,
-    "metrics": {{}},
+    "metrics": {},
     "errors": [],
-}}
+}
 
-# Parse metrics from agent text output
-import re
-for pattern in [
-    r"test_f1_weighted[:\\s]+([\\d.]+)",
-    r"f1_weighted[:\\s]+([\\d.]+)",
-    r"test_accuracy[:\\s]+([\\d.]+)",
-    r"accuracy[:\\s]+([\\d.]+)",
-    r"test_f1_macro[:\\s]+([\\d.]+)",
-    r"f1_macro[:\\s]+([\\d.]+)",
-]:
+# Parse metrics from agent output using named mapping
+METRIC_PATTERNS = {
+    "test_f1_weighted": r"test_f1_weighted[:\\s]+([\\d.]+)",
+    "f1_weighted": r"f1_weighted[:\\s]+([\\d.]+)",
+    "test_accuracy": r"test_accuracy[:\\s]+([\\d.]+)",
+    "accuracy": r"accuracy[:\\s]+([\\d.]+)",
+    "test_f1_macro": r"test_f1_macro[:\\s]+([\\d.]+)",
+    "f1_macro": r"f1_macro[:\\s]+([\\d.]+)",
+}
+for metric_name, pattern in METRIC_PATTERNS.items():
     m = re.search(pattern, output_text, re.IGNORECASE)
     if m:
-        metric_name = pattern.split("[")[0].replace("\\\\", "")
-        result["metrics"][metric_name] = float(m.group(1))
+        try:
+            result["metrics"][metric_name] = float(m.group(1))
+        except ValueError:
+            pass
 
 # Try to find model path in output
 model_match = re.search(r"model[_ ]?path[:\\s]+([^\\s,]+)", output_text, re.IGNORECASE)
@@ -316,7 +338,7 @@ if model_match:
     result["model_path"] = model_match.group(1)
 
 # Also check .kd_agent_memory.json for structured data
-memory_path = {str(kd_path)!r} + "/.kd_agent_memory.json"
+memory_path = os.path.join(kd_path, ".kd_agent_memory.json")
 try:
     with open(memory_path) as f:
         memory = json.load(f)
@@ -324,10 +346,9 @@ try:
     if runs:
         latest = runs[-1]
         if latest.get("success"):
-            m = latest.get("metrics", {{}})
+            m = latest.get("metrics", {})
             if m.get("model_path"):
                 result["model_path"] = m["model_path"]
-            # Merge any metrics from memory
             for k, v in m.items():
                 if k != "model_path" and isinstance(v, (int, float)):
                     result["metrics"][k] = v
@@ -342,16 +363,23 @@ if any(kw in output_text.lower() for kw in ["pipeline failed", "error:", "traceb
 
 json.dump(result, sys.stdout)
 """
-        return self._exec_subprocess(kd_path, script, timeout=7200)
+        return self._exec_subprocess(kd_path, script, stdin_data=json.dumps(params), timeout=7200)
 
     # ==================================================================
     # Shared helpers
     # ==================================================================
 
     def _exec_subprocess(
-        self, cwd: Path, script: str, timeout: int = 3600,
+        self,
+        cwd: Path,
+        script: str,
+        timeout: int = 3600,
+        stdin_data: str | None = None,
     ) -> dict[str, Any]:
-        """Run a Python script in a subprocess and parse JSON output."""
+        """Run a Python script in a subprocess and parse JSON output.
+
+        Parameters are passed via *stdin_data* (JSON) to avoid code injection.
+        """
         cmd = [sys.executable, "-c", script]
         if self.conda_env:
             cmd = ["conda", "run", "-n", self.conda_env, "--no-capture-output"] + cmd
@@ -360,6 +388,7 @@ json.dump(result, sys.stdout)
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True,
+                input=stdin_data,
                 timeout=timeout, cwd=str(cwd),
             )
         except subprocess.TimeoutExpired:
@@ -373,16 +402,20 @@ json.dump(result, sys.stdout)
                 "errors": [f"KD pipeline exit code {proc.returncode}: {stderr_tail}"],
             }
 
-        # Parse JSON from stdout (may have log lines before it)
+        # Parse JSON — the script always json.dump() as the last stdout line.
+        # Try full stdout first, then search from the end for a JSON object.
         try:
             return json.loads(proc.stdout)
         except json.JSONDecodeError:
-            match = re.search(r'\{.*\}', proc.stdout, re.DOTALL)
-            if match:
-                try:
-                    return json.loads(match.group())
-                except json.JSONDecodeError:
-                    pass
+            # Search backwards for the last complete JSON object
+            last_brace = proc.stdout.rfind("}")
+            if last_brace >= 0:
+                first_brace = proc.stdout.rfind("{", 0, last_brace)
+                if first_brace >= 0:
+                    try:
+                        return json.loads(proc.stdout[first_brace:last_brace + 1])
+                    except json.JSONDecodeError:
+                        pass
             return {
                 "success": False,
                 "errors": [f"Failed to parse pipeline output: {proc.stdout[-500:]}"],
@@ -392,21 +425,20 @@ json.dump(result, sys.stdout)
         errors: list[str] = []
         if not data.exists():
             errors.append(f"Data file not found: {data}")
-        if data.suffix.lower() not in (".csv", ".parquet", ".tsv"):
+            return errors  # no point checking format if file doesn't exist
+        if data.suffix.lower() not in (".csv", ".parquet", ".tsv", ".json", ".jsonl"):
             errors.append(f"Unsupported data format: {data.suffix}")
         return errors
 
     def _resolve_kd_path(self) -> Path | None:
-        """Find the KD repo — explicit config, then common locations."""
+        """Find the KD repo — explicit config, then well-known home path."""
         if self.kd_repo_path and self.kd_repo_path.exists():
             return self.kd_repo_path
-        for candidate in [
-            Path.home() / "vision" / "hackathon_knowledge_distillation",
-            Path.cwd().parent / "hackathon_knowledge_distillation",
-        ]:
-            if candidate.exists() and (candidate / "src" / "auto_ml").exists():
-                self.kd_repo_path = candidate
-                return candidate
+        # Check well-known location under home (not cwd — too fragile)
+        candidate = Path.home() / "vision" / "hackathon_knowledge_distillation"
+        if candidate.exists() and (candidate / "src" / "auto_ml").exists():
+            self.kd_repo_path = candidate
+            return candidate
         return None
 
     def _build_spec(self, problem: str, classes: list[str]) -> dict:
@@ -511,21 +543,61 @@ json.dump(result, sys.stdout)
     def _build_eval_command(
         self, kd_path: Path, output: Path, data: Path, result: dict,
     ) -> str:
-        """Build a shell command that re-measures the metric."""
+        """Build a shell command that re-measures the metric.
+
+        All paths are shlex.quote()'d to prevent shell injection.
+        """
         config_path = output / "kd_config.yaml"
         spec_path = output / "task_spec.yaml"
         return (
-            f"cd {kd_path} && "
-            f"python -m src.auto_ml.main {config_path} "
-            f"--spec {spec_path} "
-            f"--data {data}"
+            f"cd {shlex.quote(str(kd_path))} && "
+            f"python -m src.auto_ml.main {shlex.quote(str(config_path))} "
+            f"--spec {shlex.quote(str(spec_path))} "
+            f"--data {shlex.quote(str(data))}"
         )
+
+    _GITIGNORE_CONTENT = """\
+# Model weights and checkpoints
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.h5
+*.ckpt
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Environment / secrets
+.env
+.env.*
+*.secret
+credentials.json
+
+# Large data
+*.sqlite3
+mlruns/
+
+# LLM cache
+.llm_cache/
+
+# OS
+.DS_Store
+"""
 
     def _git_init(self, project_dir: Path) -> None:
         """Initialize a git repo in the project directory if not already one."""
         if (project_dir / ".git").exists():
             return
         try:
+            # Write .gitignore BEFORE staging to exclude secrets/weights
+            gitignore = project_dir / ".gitignore"
+            if not gitignore.exists():
+                gitignore.write_text(self._GITIGNORE_CONTENT, encoding="utf-8")
+
             subprocess.run(
                 ["git", "init"], cwd=str(project_dir),
                 capture_output=True, check=True,

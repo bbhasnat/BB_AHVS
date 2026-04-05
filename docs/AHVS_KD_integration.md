@@ -2,7 +2,7 @@
 
 **Purpose:** Detailed TODOs for integrating the KD system as a "solver" in AHVS's genesis layer, and adding `knowledge_distillation` as a hypothesis type. All work happens in the AHVS repo (`BB_AHVS`), branch `KD_integration`.
 
-**Prerequisite:** KD bug fixes from `KD_improvement_fix.md` should be completed and merged to KD's `main` branch first. The KD repo must be pip-installable or accessible via Python path.
+**Prerequisite:** ~~KD bug fixes from `KD_improvement_fix.md` should be completed and merged to KD's `main` branch first.~~ **DONE** (2026-04-05) — All 5 bugs + 2 improvements merged to KD `main`. The KD repo must be pip-installable or accessible via Python path.
 
 **Architecture principle:** AHVS is HOM (Hypothesis-driven Optimization with Memory). KD is a solver. They talk through a contract, never through shared code. Changes in AHVS never affect KD.
 
@@ -14,13 +14,15 @@
 
 ---
 
-## Phase 1: Solver Contract + KD Adapter
+## Phase 1: Solver Contract + KD Adapter — DONE (2026-04-05)
 
 **Goal:** Define the solver protocol and build a thin adapter that calls KD's pipeline, producing AHVS-compatible output. No changes to AHVS core.
 
-### Task 1.1: Create Genesis Module Structure
+**Status:** Complete. Commit `6a88ceb` on `KD_integration` branch.
 
-Create the following directory structure:
+### Task 1.1: Create Genesis Module Structure — DONE
+
+Created the following directory structure:
 
 ```
 ahvs/genesis/
@@ -33,7 +35,7 @@ ahvs/genesis/
     └── kd_classifier.py     # KD adapter: calls KD pipeline, returns GenesisResult
 ```
 
-### Task 1.2: Define the Solver Contract (`contract.py`)
+### Task 1.2: Define the Solver Contract (`contract.py`) — DONE
 
 ```python
 from dataclasses import dataclass
@@ -70,11 +72,11 @@ class Solver(Protocol):
 - `eval_command` must be a shell command that, when run in the project_dir, outputs the metric value
 - The Solver protocol is minimal — easy for future solvers to implement
 
-### Task 1.3: Build KD Classifier Adapter (`solvers/kd_classifier.py`)
+### Task 1.3: Build KD Classifier Adapter (`solvers/kd_classifier.py`) — DONE
 
-This is the bridge between AHVS and KD. Two implementation options — choose based on KD state:
+This is the bridge between AHVS and KD. Both options implemented:
 
-**Option A: Direct Python API (simpler, works today)**
+**Option A: Direct Python API (`mode=pipeline`)** — DEFAULT
 
 ```python
 def solve(self, problem, data_path, target_metric, output_dir, config_overrides=None):
@@ -89,7 +91,7 @@ def solve(self, problem, data_path, target_metric, output_dir, config_overrides=
 
 **Requires:** KD installable via `pip install -e ../hackathon_knowledge_distillation` or sys.path manipulation.
 
-**Option B: Agent SDK (more powerful, requires KD agent fixes)**
+**Option B: Agent SDK (`mode=agent`)** — ALSO IMPLEMENTED
 
 ```python
 def solve(self, problem, data_path, target_metric, output_dir, config_overrides=None):
@@ -104,9 +106,9 @@ def solve(self, problem, data_path, target_metric, output_dir, config_overrides=
 
 **Requires:** KD agent bugs fixed (KD_improvement_fix.md), `claude-agent-sdk` installed.
 
-**Recommendation:** Start with Option A for reliability. Switch to Option B once KD agent is battle-tested.
+**Implementation note:** Both modes are available. User selects via `--mode pipeline` (default) or `--mode agent`. Both run via subprocess to isolate KD dependencies. Agent mode parses metrics from agent output text + `.kd_agent_memory.json`.
 
-### Task 1.4: Build Solver Registry (`registry.py`)
+### Task 1.4: Build Solver Registry (`registry.py`) — DONE
 
 YAML-driven registry so new solvers can be added without code changes:
 
@@ -126,7 +128,7 @@ solvers:
 
 The registry loads solver configs, instantiates solver classes, and provides a `get_solver(problem_type)` method.
 
-### Task 1.5: Build Problem Router (`router.py`)
+### Task 1.5: Build Problem Router (`router.py`) — DONE
 
 LLM-based routing that maps a problem description to a solver:
 
@@ -140,7 +142,7 @@ def route(self, problem: str) -> str:
 
 For now, this can be simple — if only one solver exists (kd_classifier), just return it. The router becomes important when solver #2 is added.
 
-### Task 1.6: Test the Adapter Independently
+### Task 1.6: Test the Adapter Independently — DONE (smoke test)
 
 Write a test script (not a unit test — a manual integration test):
 
@@ -164,11 +166,13 @@ print(f"Eval command: {result.eval_command}")
 
 ---
 
-## Phase 2: Genesis CLI Entry Point
+## Phase 2: Genesis CLI Entry Point — DONE (2026-04-05)
 
 **Goal:** Add `ahvs genesis` subcommand. No changes to the 8-stage AHVS loop.
 
-### Task 2.1: Add Genesis Subcommand to CLI (`ahvs/cli.py`)
+**Status:** Complete. Commit `6a88ceb` on `KD_integration` branch.
+
+### Task 2.1: Add Genesis Subcommand to CLI (`ahvs/cli.py`) — DONE
 
 Add a new subcommand (or flag) to the existing CLI:
 
@@ -192,7 +196,7 @@ ahvs genesis \
 - Register the new project in `~/.ahvs/registry.json`
 - Print success message with next-step instructions
 
-### Task 2.2: Auto-Generate eval_command
+### Task 2.2: Auto-Generate eval_command — DONE
 
 The adapter must produce an `eval_command` that AHVS can run in future cycles. This is tricky because:
 - TML classifier eval requires the correct spec YAML, data path, and model path
@@ -203,7 +207,7 @@ The adapter must produce an `eval_command` that AHVS can run in future cycles. T
 - This script loads the trained model, runs inference on test data, prints the metric
 - `eval_command` = `python eval_metric.py`
 
-### Task 2.3: Create Genesis Skill (`.claude/skills/ahvs_genesis/`)
+### Task 2.3: Create Genesis Skill (`.claude/skills/ahvs_genesis/`) — DONE
 
 Create a Claude Code skill at `.claude/skills/ahvs_genesis/` that provides an interactive, conversational interface to genesis. Same pattern as `ahvs_onboarding` and `ahvs_multiagent`.
 
@@ -218,7 +222,7 @@ The skill:
 
 **Design principle:** Genesis is a step-by-step tool. The user invokes genesis first, inspects the result, then decides when to run AHVS optimization. The skill does NOT auto-chain into AHVS cycles.
 
-### Task 2.4: Test End-to-End (Genesis → AHVS Cycle)
+### Task 2.4: Test End-to-End (Genesis → AHVS Cycle) — PENDING (needs live run)
 
 Step-by-step usage (the primary workflow):
 
@@ -453,8 +457,10 @@ Trained Model (output)
 - OpenAI: `OPENAI_API_KEY` in KD repo's `.env` — for gpt-4.1-mini labeling
 - Google: `GOOGLE_API_KEY` in KD repo's `.env` — if using Gemini 2.5 Flash Lite instead
 
-**Default model configs to update in KD repo:**
-- `src/kd_agent/config_builder.py` — change default `annotator.model` from `gpt-4o` → `gpt-4.1-mini`
-- `src/kd_agent/prompts.py` — if any tool defaults reference `gpt-4o`, change to `gpt-4.1-mini`
-- `examples/auto_ml/config.yaml` — update `prompt_builder.model` and `annotator.model`
-- `examples/auto_label/config.yaml` — same updates
+**Default model configs to update in KD repo:** **DONE** (2026-04-05) — All 6 locations updated from gpt-4o → gpt-4.1-mini as part of KD improvement plan.
+
+---
+
+## Pre-requisite: LLM Cost Optimization — DONE (2026-04-05)
+
+Content-addressable LLM response cache implemented in `ahvs/llm/cache.py` (commit `341831f`). SQLite-backed, SHA-256 keys, WAL mode, TTL support. Wraps all 3 AHVS orchestration LLM calls transparently. Disable with `--no-cache` or `LLM_CACHE_ENABLED=false`. Design ported from KD's `LLM_cost_optimization.md`.

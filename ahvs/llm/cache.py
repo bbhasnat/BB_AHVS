@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ class LLMCache:
         self._dir = Path(cache_dir) if cache_dir else Path(".llm_cache")
         self._db_path = self._dir / "responses.db"
         self._conn: sqlite3.Connection | None = None
+        self._lock = threading.Lock()
         self._store_messages = os.environ.get(
             "LLM_CACHE_STORE_MESSAGES", "false"
         ).lower() in ("true", "1", "yes")
@@ -57,7 +59,9 @@ class LLMCache:
         if self._conn is not None:
             return self._conn
         self._dir.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path), timeout=10)
+        self._conn = sqlite3.connect(
+            str(self._db_path), timeout=10, check_same_thread=False,
+        )
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(
             """
@@ -95,15 +99,18 @@ class LLMCache:
         max_tokens: int | None = None,
         temperature: float | None = None,
         json_mode: bool = False,
+        strip_thinking: bool = False,
     ) -> str:
         """SHA-256 of the full call parameters — any change produces a new key."""
         blob: dict[str, Any] = {
+            "cache_version": 1,
             "model": model,
             "messages": messages,
             "system": system,
             "max_tokens": max_tokens,
             "temperature": temperature,
             "json_mode": json_mode,
+            "strip_thinking": strip_thinking,
         }
         raw = json.dumps(blob, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -114,6 +121,10 @@ class LLMCache:
 
     def get(self, key: str) -> dict[str, Any] | None:
         """Look up a cached response. Returns None on miss or expired entry."""
+        with self._lock:
+            return self._get_unlocked(key)
+
+    def _get_unlocked(self, key: str) -> dict[str, Any] | None:
         conn = self._connect()
         row = conn.execute(
             "SELECT response, model, tokens_in, tokens_out, expires_at "
@@ -155,6 +166,17 @@ class LLMCache:
         messages: list[dict[str, str]] | None = None,
     ) -> None:
         """Store a validated response in the cache."""
+        with self._lock:
+            self._put_unlocked(
+                key, content=content, model=model,
+                tokens_in=tokens_in, tokens_out=tokens_out, messages=messages,
+            )
+
+    def _put_unlocked(
+        self, key: str, *, content: str, model: str,
+        tokens_in: int, tokens_out: int,
+        messages: list[dict[str, str]] | None,
+    ) -> None:
         conn = self._connect()
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         expires_at: str | None = None
@@ -275,6 +297,7 @@ class CachedClientWrapper:
             max_tokens=max_tokens,
             temperature=temperature,
             json_mode=json_mode,
+            strip_thinking=strip_thinking,
         )
 
         cached = self._cache.get(key)
@@ -349,4 +372,7 @@ class CachedClientWrapper:
 
     # Proxy everything else to the underlying client
     def __getattr__(self, name: str) -> Any:
+        # Guard against infinite recursion during __init__
+        if name.startswith("_"):
+            raise AttributeError(name)
         return getattr(self._client, name)

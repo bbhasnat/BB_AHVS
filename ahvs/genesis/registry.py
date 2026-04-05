@@ -68,7 +68,23 @@ class SolverRegistry:
         class_name = defn["class"]
         config = defn.get("config", {})
 
-        mod = importlib.import_module(module_path)
+        # Security: only allow importing from ahvs.genesis.solvers namespace
+        _ALLOWED_PREFIXES = ("ahvs.genesis.solvers",)
+        if not any(module_path.startswith(p) for p in _ALLOWED_PREFIXES):
+            raise ValueError(
+                f"Solver {name!r}: module {module_path!r} is outside allowed "
+                f"namespaces {_ALLOWED_PREFIXES}. Custom solvers must live "
+                f"under ahvs.genesis.solvers."
+            )
+
+        try:
+            mod = importlib.import_module(module_path)
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                f"Solver {name!r}: cannot import module {module_path!r} "
+                f"(from {self._path}): {exc}"
+            ) from exc
+
         cls = getattr(mod, class_name)
         instance = cls(**config)
 
