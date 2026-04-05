@@ -301,7 +301,135 @@ def _cmd_unregister(name: str) -> int:
     return 1
 
 
+def cmd_genesis(argv: list[str]) -> int:
+    """Run the genesis subcommand — create a new project from data."""
+    parser = argparse.ArgumentParser(
+        prog="ahvs genesis",
+        description="Genesis — bootstrap a new AHVS project from raw data",
+    )
+    parser.add_argument(
+        "--problem", "-p", required=True,
+        help="Natural language problem description (e.g. 'Classify customer emails by intent')",
+    )
+    parser.add_argument(
+        "--data", "-d", required=True,
+        help="Path to input data file (CSV, TSV, or Parquet)",
+    )
+    parser.add_argument(
+        "--target-metric", "-m", default="f1_weighted",
+        help="Metric to optimize (default: f1_weighted)",
+    )
+    parser.add_argument(
+        "--output-dir", "-o", required=True,
+        help="Output directory for the new project (REQUIRED — never auto-generated)",
+    )
+    parser.add_argument(
+        "--solver", "-s", default=None,
+        help="Solver name (default: auto-detect from problem description)",
+    )
+    parser.add_argument(
+        "--mode", default="pipeline",
+        choices=["pipeline", "agent"],
+        help=(
+            "Execution mode. 'pipeline' (default): deterministic, generates config/spec "
+            "and calls the KD pipeline directly. 'agent': uses the KD Agent (claude-agent-sdk) "
+            "to inspect data and drive all stages autonomously."
+        ),
+    )
+    parser.add_argument(
+        "--solver-registry",
+        help="Path to custom solvers.yaml (default: built-in registry)",
+    )
+    parser.add_argument(
+        "--classes", nargs="+",
+        help="Classification classes (e.g. --classes positive negative neutral)",
+    )
+    parser.add_argument(
+        "--input-column", default="text",
+        help="Name of the text column in the data file (default: text)",
+    )
+    parser.add_argument(
+        "--annotation-model", default=None,
+        help="LLM model for annotation (default: gpt-4.1-mini). Never use gpt-4o.",
+    )
+
+    args = parser.parse_args(argv)
+
+    from pathlib import Path as _Path
+    from ahvs.genesis.registry import SolverRegistry
+    from ahvs.genesis.router import ProblemRouter
+
+    # Load solver
+    registry = SolverRegistry(args.solver_registry)
+    if args.solver:
+        try:
+            solver = registry.get(args.solver)
+        except KeyError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+    else:
+        router = ProblemRouter(registry)
+        solver_name = router.route(args.problem)
+        solver = registry.get(solver_name)
+        print(f"[Genesis] Auto-selected solver: {solver_name}")
+
+    # Build config overrides
+    overrides: dict = {"mode": args.mode}
+    if args.classes:
+        overrides["classes"] = args.classes
+    if args.input_column != "text":
+        overrides["input_column"] = args.input_column
+    if args.annotation_model:
+        overrides["annotation_model"] = args.annotation_model
+
+    print(f"[Genesis] Problem: {args.problem}")
+    print(f"[Genesis] Data: {args.data}")
+    print(f"[Genesis] Mode: {args.mode}")
+    print(f"[Genesis] Output: {args.output_dir}")
+    print()
+
+    # Run solver
+    result = solver.solve(
+        problem=args.problem,
+        data_path=args.data,
+        target_metric=args.target_metric,
+        output_dir=args.output_dir,
+        config_overrides=overrides,
+    )
+
+    if not result.success:
+        print("Genesis FAILED:", file=sys.stderr)
+        for err in result.errors:
+            print(f"  - {err}", file=sys.stderr)
+        return 1
+
+    # Register the project
+    from ahvs.registry import register as _register_repo
+    metric_val = result.baseline_metric.get(args.target_metric)
+    short_name = _register_repo(
+        result.project_dir,
+        primary_metric=args.target_metric,
+        baseline_value=metric_val,
+    )
+
+    print(f"[Genesis] Success!")
+    print(f"  Project:  {result.project_dir}")
+    print(f"  Metric:   {args.target_metric} = {metric_val}")
+    print(f"  Model:    {result.model_path or 'N/A'}")
+    print(f"  Registry: registered as '{short_name}'")
+    print()
+    print("Next step — run AHVS optimization:")
+    print(f"  ahvs --repo {short_name} --question 'improve {args.target_metric} to <target>'")
+
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    # Intercept 'genesis' subcommand before main argparse
+    effective_argv = argv if argv is not None else sys.argv[1:]
+    if effective_argv and effective_argv[0] == "genesis":
+        return cmd_genesis(effective_argv[1:])
+
     parser = argparse.ArgumentParser(
         prog="ahvs",
         description="AHVS — Adaptive Hypothesis Validation System",

@@ -1,0 +1,21 @@
+# Genesis solver registry
+# Each solver maps a problem type to a module that can bootstrap a project.
+#
+# To add a new solver:
+#   1. Create a class implementing the Solver protocol (see contract.py)
+#   2. Add an entry below with module path, class name, and problem_types
+
+solvers:
+  kd_classifier:
+    module: ahvs.genesis.solvers.kd_classifier
+    class: KDClassifierSolver
+    problem_types:
+      - classification
+      - multi-label
+      - sentiment
+      - intent
+    config:
+      kd_repo_path: /home/ubuntu/vision/hackathon_knowledge_distillation
+      default_model: distilbert-base-uncased
+      default_annotation_model: gpt-4.1-mini
+      conda_env: ""

@@ -451,6 +451,47 @@ AHVS infers domain tags (`llm`, `rag`, `ml`, `prompt-driven`) by scanning `requi
 
 ## 7. CLI Reference
 
+### Genesis — bootstrap a new project from data
+
+```bash
+ahvs genesis \
+  --problem "Classify customer emails into intent categories" \
+  --data /path/to/emails.csv \
+  --target-metric f1_weighted \
+  --output-dir /path/to/new_project \
+  --mode pipeline
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--problem`, `-p` | *(required)* | Natural language problem description |
+| `--data`, `-d` | *(required)* | Path to input data file (CSV, TSV, Parquet) |
+| `--output-dir`, `-o` | *(required)* | Output directory — never auto-generated |
+| `--target-metric`, `-m` | `f1_weighted` | Metric to optimize |
+| `--mode` | `pipeline` | `pipeline` (deterministic) or `agent` (KD Agent via claude-agent-sdk, smarter) |
+| `--solver`, `-s` | *(auto-detect)* | Solver name (e.g. `kd_classifier`) |
+| `--classes` | *(none)* | Classification classes (e.g. `--classes pos neg neutral`) |
+| `--input-column` | `text` | Text column name in the data file |
+| `--annotation-model` | `gpt-4.1-mini` | LLM for annotation (never gpt-4o) |
+| `--solver-registry` | *(built-in)* | Path to custom solvers.yaml |
+
+Genesis creates a project with `.ahvs/baseline_metric.json`, registers it in `~/.ahvs/registry.json`, and git-inits the directory. Use `/ahvs_genesis` in Claude Code for an interactive walkthrough.
+
+**Step-by-step workflow:**
+
+```bash
+# Step 1: Genesis creates a new project
+ahvs genesis -p "sentiment classification" -d emails.csv -o /tmp/my_classifier
+
+# Step 2: Inspect the result
+cat /tmp/my_classifier/.ahvs/baseline_metric.json
+
+# Step 3: Run AHVS optimization (when ready)
+ahvs --repo my_classifier --question "improve f1_weighted to 0.85" --domain ml
+```
+
+### Cycle — run an AHVS optimization cycle
+
 ```
 ahvs [options]
 ```
@@ -910,7 +951,15 @@ ahvs/
 ├── runner.py                # execute_ahvs_cycle() — outer orchestration loop
 ├── evolution.py             # EvolutionStore — cross-cycle memory persistence
 ├── registry.py              # Repo registry (~/.ahvs/registry.json)
-├── cli.py                   # CLI entry point (ahvs command)
+├── cli.py                   # CLI entry point (ahvs command + ahvs genesis)
+├── genesis/                 # Genesis — solver-based project bootstrapping
+│   ├── __init__.py          # Exports: GenesisResult, Solver, SolverRegistry, ProblemRouter
+│   ├── contract.py          # GenesisResult dataclass + Solver protocol
+│   ├── registry.py          # YAML-driven SolverRegistry
+│   ├── router.py            # ProblemRouter (problem description → solver)
+│   └── solvers/
+│       ├── kd_classifier.py # KD adapter (pipeline + agent modes)
+│       └── solvers.yaml     # Solver registry config
 ├── domain_packs/            # Domain-specific prompt + skill overrides
 │   ├── ml_prompts.yaml      # Traditional ML hypothesis prompts (--domain ml)
 │   └── ml_skills.yaml       # ML skill templates (sklearn, optuna, etc.)
@@ -936,6 +985,9 @@ ahvs/
 └── references/
     ├── agent_prompts.md           # Executor + observer prompts with placeholders
     └── failure_classification.md  # FRAMEWORK_BUG / HYPOTHESIS_MISS / AMBIGUOUS rules
+
+.claude/skills/ahvs_genesis/       # Claude Code genesis skill
+└── SKILL.md                       # Interactive wizard: data -> project with baseline
 ```
 
 ### Per-repo `.ahvs/` directory
