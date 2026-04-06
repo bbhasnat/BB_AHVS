@@ -15,6 +15,33 @@ description: >-
 
 # AHVS Onboarding
 
+## Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| `/ahvs_onboarding` | Terminal-based input collection (default) |
+| `/ahvs_onboarding:gui` | Browser-based form for input collection — see `references/gui.md` |
+
+### /ahvs_onboarding:gui — Browser-Based Onboarding Form
+
+Launches a browser-based form to collect all onboarding inputs (repo path, metric name, eval command, notes) instead of asking in the terminal. After submission, proceeds directly to codebase inspection.
+
+Load: `references/gui.md` for full protocol.
+
+**What it does:**
+
+1. **Serve form** — starts a localhost HTTP server with a dark-themed input form
+2. **Collect inputs** — user fills out repo path, primary metric, eval command (optional), additional notes (optional)
+3. **Validate** — form validates required fields and checks repo path exists before allowing submission
+4. **Return** — returns collected inputs as a dict, then proceeds with standard onboarding workflow
+
+**Usage:**
+```
+/ahvs_onboarding:gui
+```
+
+---
+
 This skill turns any repository into an AHVS-ready target. It handles the full onboarding pipeline: codebase analysis, eval command extraction, baseline configuration, and verification.
 
 The user should never need to manually author JSON or figure out what AHVS needs. This skill inspects the repo, creates whatever is missing, asks only the smallest necessary follow-up questions, and writes verified artifacts.

@@ -17,6 +17,33 @@ description: >-
 
 # AHVS Multi-Agent Execution
 
+## Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| `/ahvs_multiagent` | Terminal-based input collection (default) |
+| `/ahvs_multiagent:gui` | Browser-based form for input collection — see `references/gui.md` |
+
+### /ahvs_multiagent:gui — Browser-Based Multi-Agent Form
+
+Launches a browser-based form to collect all multi-agent cycle inputs (repo path, question, provider, model, max hypotheses, auto-approve, domain) instead of asking in the terminal. After submission, proceeds directly to Phase 1 (hypothesis generation).
+
+Load: `references/gui.md` for full protocol.
+
+**What it does:**
+
+1. **Serve form** — starts a localhost HTTP server with a dark-themed input form
+2. **Collect inputs** — user fills out repo path, cycle question, LLM provider/model, max hypotheses, auto-approve toggle, domain
+3. **Validate** — form validates required fields and checks repo path exists before allowing submission
+4. **Return** — returns collected inputs as a dict, then proceeds with the 5-phase multi-agent workflow
+
+**Usage:**
+```
+/ahvs_multiagent:gui
+```
+
+---
+
 This skill orchestrates a full AHVS hypothesis-validation cycle using three coordinated Claude Code agents: a team lead (your session), an executor, and an observer. The human's only manual step is selecting hypotheses in a browser GUI (or even that can be skipped with auto-approve).
 
 ## What This Skill Does

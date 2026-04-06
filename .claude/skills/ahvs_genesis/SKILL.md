@@ -12,6 +12,33 @@ description: >-
 
 # AHVS Genesis
 
+## Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| `/ahvs_genesis` | Terminal-based input collection (default) |
+| `/ahvs_genesis:gui` | Browser-based form for input collection — see `references/gui.md` |
+
+### /ahvs_genesis:gui — Browser-Based Genesis Form
+
+Launches a browser-based form to collect all Genesis inputs (problem description, data path, metric, output directory, execution mode) instead of asking in the terminal. The form includes live path validation and conditional fields.
+
+Load: `references/gui.md` for full protocol.
+
+**What it does:**
+
+1. **Serve form** — starts a localhost HTTP server with a dark-themed input form
+2. **Collect inputs** — user fills out problem, data path, metric, output dir, mode, classes, input column
+3. **Validate** — form validates required fields and checks paths exist before allowing submission
+4. **Return** — returns collected inputs as a dict, then proceeds with standard Genesis workflow
+
+**Usage:**
+```
+/ahvs_genesis:gui
+```
+
+---
+
 This skill creates a new AHVS-ready project from raw data. It is the
 **step before** AHVS optimization — genesis builds the initial project
 and baseline, then the user decides when to run AHVS cycles.
