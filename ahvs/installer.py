@@ -19,7 +19,7 @@ _CLAUDE_COMMANDS_DIR = Path.home() / ".claude" / "commands"
 _AHVS_HOME = Path.home() / ".ahvs"
 
 # Skill directories to install
-SKILL_NAMES = ["ahvs_genesis", "ahvs_multiagent", "ahvs_onboarding"]
+SKILL_NAMES = ["ahvs_brainstorm", "ahvs_genesis", "ahvs_multiagent", "ahvs_onboarding"]
 
 # Command directories to install (subcommand registration)
 # Each maps to ~/.claude/commands/<dir_name>/gui.md
@@ -252,13 +252,9 @@ def run_install(force: bool = False, quiet: bool = False) -> int:
         print()
         print("Skills installed:")
         for name in installed:
-            print(f"  /ahvs_{name.removeprefix('ahvs_')}")
-            if name == "ahvs_genesis":
-                print(f"  /ahvs_genesis:gui")
-            elif name == "ahvs_multiagent":
-                print(f"  /ahvs_multiagent:gui")
-            elif name == "ahvs_onboarding":
-                print(f"  /ahvs_onboarding:gui")
+            print(f"  /{name}")
+            if name in ("ahvs_genesis", "ahvs_multiagent", "ahvs_onboarding"):
+                print(f"  /{name}:gui")
         print()
         print("Quick start:")
         print("  ahvs --help              # CLI reference")

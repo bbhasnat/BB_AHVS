@@ -76,6 +76,7 @@ ahvs/
 
 Skills (`.claude/skills/`) define the full workflow; commands (`.claude/commands/`) register subcommands.
 
+- `/ahvs_brainstorm` — Pre-genesis design exploration (what to build and why)
 - `/ahvs_onboarding` — Onboards a new repo for AHVS (creates `.ahvs/baseline_metric.json`)
 - `/ahvs_onboarding:gui` — Browser form for onboarding
 - `/ahvs_multiagent` — Runs AHVS cycles with multi-agent supervision (team lead + executor + observer)
