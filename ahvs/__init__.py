@@ -14,12 +14,15 @@ Public API
     HypothesisResult                  — tool-agnostic result contract
 """
 
+__version__ = "0.1.0"
+
 from ahvs.config import AHVSConfig
 from ahvs.result import HypothesisResult
 from ahvs.runner import execute_ahvs_cycle, read_ahvs_checkpoint
 from ahvs.stages import AHVSStage
 
 __all__ = [
+    "__version__",
     "AHVSConfig",
     "AHVSStage",
     "HypothesisResult",

@@ -237,10 +237,40 @@ Your only manual step is clicking checkboxes in the browser. For fully automatic
 
 ## 5. Quick Start
 
+### Installation
+
+**One-command install** (from cloned repo):
+
+```bash
+git clone https://github.com/bbhasnat/BB_AHVS.git && cd BB_AHVS
+./install.sh          # pip install + copy skills to ~/.claude/skills/ + init ~/.ahvs/
+```
+
+**Developer install** (editable, for contributors):
+
+```bash
+git clone https://github.com/bbhasnat/BB_AHVS.git && cd BB_AHVS
+./install.sh --dev    # pip install -e . + skills + init
+```
+
+**Manual install** (if you prefer step-by-step):
+
+```bash
+pip install .                  # or: pip install -e .[dev]
+ahvs install                   # copy skills globally + init ~/.ahvs/
+```
+
+**After pulling updates:**
+
+```bash
+git pull && pip install -e .   # reinstall package
+ahvs update                    # refresh skills in ~/.claude/skills/
+```
+
 ### Prerequisites
 
 - Python 3.11+
-- `pip install ahvs`
+- git
 - **API mode:** An API key for a Claude model (or any OpenAI-compatible endpoint)
 - **ACP mode:** A local ACP-compatible agent CLI (Claude Code, Codex, etc.) + `acpx`
 
@@ -1280,10 +1310,10 @@ AHVS already has a strong generic execution contract: repo + baseline metric + `
 
 1. **CLI + GUI hypothesis add/insert/edit** *(priority)*
    Allow operators to manually add, insert, or edit hypotheses via CLI flags and the browser-based GUI before execution — not just select/deselect from LLM-generated candidates. This is the highest-priority UX improvement: it unblocks human-in-the-loop workflows where domain experts want to inject their own ideas alongside LLM-generated ones.
-2. **Installable plugin / skills / installer**
-   Develop an installable package (pip, brew, or standalone installer) with bundled skills so that others can install and use AHVS without cloning the repo. Expose as much functionality as possible through the installer — onboarding, cycle execution, results viewer.
-3. **Package & distribution**
-   pip extras, Docker image, one-command setup. The goal is `pip install ahvs` or `docker run ahvs` with zero manual configuration beyond a target repo path and eval command.
+2. ~~**Installable plugin / skills / installer**~~ **DONE**
+   Implemented: `./install.sh` one-command installer, `ahvs install` / `ahvs update` / `ahvs uninstall` CLI subcommands, skills bundled in wheel via `hatch force-include`, skills auto-copied to `~/.claude/skills/` for global availability.
+3. ~~**Package & distribution**~~ **DONE**
+   `pip install ahvs` works with bundled skills. `./install.sh` handles the full setup. Docker image is deferred.
 4. **Browser GUI for manual lesson/memory cleanup**
    Add an interactive browser-based GUI (similar to hypothesis selector) that lets the operator inspect, filter, and selectively delete individual lessons from `lessons.jsonl` and memory files from `.ahvs/memory/`. Useful for curating cross-cycle memory when automatic compaction is insufficient.
 

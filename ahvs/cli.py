@@ -424,11 +424,69 @@ def cmd_genesis(argv: list[str]) -> int:
     return 0
 
 
+def cmd_install(argv: list[str]) -> int:
+    """Run the install subcommand."""
+    parser = argparse.ArgumentParser(
+        prog="ahvs install",
+        description="Install AHVS skills globally and initialize ~/.ahvs/",
+    )
+    parser.add_argument(
+        "--force", "-f", action="store_true",
+        help="Force reinstall even if skills are up to date",
+    )
+    parser.add_argument(
+        "--quiet", "-q", action="store_true",
+        help="Suppress progress output",
+    )
+    args = parser.parse_args(argv)
+
+    from ahvs.installer import run_install
+    return run_install(force=args.force, quiet=args.quiet)
+
+
+def cmd_update(argv: list[str]) -> int:
+    """Run the update subcommand."""
+    parser = argparse.ArgumentParser(
+        prog="ahvs update",
+        description="Update AHVS skills to match the current package version",
+    )
+    parser.add_argument(
+        "--quiet", "-q", action="store_true",
+        help="Suppress progress output",
+    )
+    args = parser.parse_args(argv)
+
+    from ahvs.installer import run_update
+    return run_update(quiet=args.quiet)
+
+
+def cmd_uninstall(argv: list[str]) -> int:
+    """Run the uninstall subcommand."""
+    parser = argparse.ArgumentParser(
+        prog="ahvs uninstall",
+        description="Remove AHVS skills from ~/.claude/skills/",
+    )
+    parser.add_argument(
+        "--quiet", "-q", action="store_true",
+        help="Suppress progress output",
+    )
+    args = parser.parse_args(argv)
+
+    from ahvs.installer import run_uninstall
+    return run_uninstall(quiet=args.quiet)
+
+
 def main(argv: list[str] | None = None) -> int:
-    # Intercept 'genesis' subcommand before main argparse
+    # Intercept subcommands before main argparse
     effective_argv = argv if argv is not None else sys.argv[1:]
     if effective_argv and effective_argv[0] == "genesis":
         return cmd_genesis(effective_argv[1:])
+    if effective_argv and effective_argv[0] == "install":
+        return cmd_install(effective_argv[1:])
+    if effective_argv and effective_argv[0] == "update":
+        return cmd_update(effective_argv[1:])
+    if effective_argv and effective_argv[0] == "uninstall":
+        return cmd_uninstall(effective_argv[1:])
 
     parser = argparse.ArgumentParser(
         prog="ahvs",
