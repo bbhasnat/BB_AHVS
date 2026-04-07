@@ -4,7 +4,7 @@
 
 AHVS (Adaptive Hypothesis Validation System) is a standalone 8-stage cyclic pipeline that autonomously improves LLM/RAG systems. Given a target repo and a question like "How can we improve answer_relevance by 5%?", it generates hypotheses, tests them in isolated git worktrees, measures results against a baseline metric, and archives lessons for future cycles.
 
-**Package:** `ahvs` (installed via `pip install -e .` from this repo)
+**Package:** `ahvs` — install via `./install.sh` (or `pip install -e . && ahvs install`)
 **CLI:** `ahvs --repo <path-or-name> --question "..." --provider <provider> --model <model> --api-key-env <KEY>`
 **Python API:** `from ahvs import AHVSConfig, execute_ahvs_cycle, AHVSStage, HypothesisResult`
 
@@ -42,7 +42,8 @@ All AHVS project-specific memory lives in the **target repo**, not in Claude's m
 
 ```
 ahvs/
-├── cli.py               # Standalone CLI entry point
+├── cli.py               # CLI entry point (ahvs, ahvs genesis, ahvs install/update/uninstall)
+├── installer.py          # Global installer (skills → ~/.claude/skills/, commands → ~/.claude/commands/)
 ├── registry.py           # Repo registry (~/.ahvs/registry.json)
 ├── config.py             # AHVSConfig dataclass
 ├── executor.py           # 8 stage handlers (largest file, ~2500 lines)
@@ -55,6 +56,8 @@ ahvs/
 ├── result.py             # HypothesisResult contract
 ├── skills.py             # Skill library
 ├── worktree.py           # Git worktree lifecycle
+├── gui.py                # Schema-driven browser form server
+├── gui_schemas.py        # Pre-built GUI schemas (genesis, multiagent, onboarding)
 ├── hypothesis_selector.py # Browser GUI for hypothesis selection
 ├── evolution.py          # Cross-cycle lesson storage (EvolutionStore)
 ├── domain_packs/         # Domain-specific prompt + skill overrides
@@ -69,10 +72,16 @@ ahvs/
     └── thinking_tags.py  # Strip <think> tags from LLM output
 ```
 
-## Skills
+## Skills & Commands
 
-- `.claude/skills/ahvs_onboarding/` — Onboards a new repo for AHVS (creates `.ahvs/baseline_metric.json`)
-- `.claude/skills/ahvs_multiagent/` — Runs AHVS cycles with multi-agent supervision (team lead + executor + observer)
+Skills (`.claude/skills/`) define the full workflow; commands (`.claude/commands/`) register subcommands.
+
+- `/ahvs_onboarding` — Onboards a new repo for AHVS (creates `.ahvs/baseline_metric.json`)
+- `/ahvs_onboarding:gui` — Browser form for onboarding
+- `/ahvs_multiagent` — Runs AHVS cycles with multi-agent supervision (team lead + executor + observer)
+- `/ahvs_multiagent:gui` — Browser form for multi-agent cycle
+- `/ahvs_genesis` — Creates a new AHVS project from raw data
+- `/ahvs_genesis:gui` — Browser form for genesis
 
 ## Tests
 
