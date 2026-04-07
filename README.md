@@ -141,9 +141,11 @@ Just describe what you want in natural language. No commands to memorize.
 **Brainstorming before building:**
 ```
 > I have customer feedback data in emails.csv — help me figure out what to build
+> I want to improve my existing RAG pipeline — brainstorm approaches
+> I have an idea for a classifier but no data yet — help me think it through
 ```
 
-The `ahvs_brainstorm` skill will explore your data, ask clarifying questions, propose 2-3 approaches with trade-offs, and write a design doc. No code runs until you approve the design.
+The `ahvs_brainstorm` skill asks what you have (data, existing repo, or just an idea), then asks clarifying questions, proposes 2-3 approaches with trade-offs, and writes a design doc. No code runs until you approve the design.
 
 **Onboarding a new repo:**
 ```

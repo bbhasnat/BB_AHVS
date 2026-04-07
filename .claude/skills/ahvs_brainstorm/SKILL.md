@@ -45,17 +45,33 @@ compute and dead-end projects.
 
 ## Workflow
 
-### Step 1: Explore Context
+### Step 1: Understand What the User Has
 
-Understand what the user has before proposing anything. Inspect:
+Brainstorm runs **before** a project exists. Don't assume there's a codebase to scan.
 
-- **Data files** — read samples, check schema, row counts, class distribution
-- **Existing code** — any models, pipelines, eval scripts already present?
-- **Documentation** — READMEs, notebooks, prior experiment notes
-- **Git history** — recent work direction, abandoned approaches
-- **Domain** — what kind of problem is this? (NLP classification, RAG, ML, etc.)
+Start by asking the user:
 
+```
+What do you have so far?
+  A) A data file (CSV, Parquet, etc.) and a problem idea
+  B) An existing repo/project I want to improve with AHVS
+  C) Just an idea — no data or code yet
+```
+
+**If A (data + idea):** Ask for the data file path. Read a sample (first 10-20 rows),
+check schema, column names, row count, class distribution if applicable. Then proceed
+to Step 2.
+
+**If B (existing repo):** Ask for the repo path. Scan it:
+- Data files, eval scripts, existing models
+- READMEs, notebooks, prior experiment notes
+- Git history — recent work direction, abandoned approaches
+- Domain — NLP classification, RAG, ML, etc.
 Use Glob, Read, and Grep to scan. Don't ask the user for info you can discover.
+Then proceed to Step 2.
+
+**If C (just an idea):** Skip directly to Step 2 — clarifying questions will
+flesh out the concept. No scanning needed.
 
 ### Step 2: Ask Clarifying Questions
 
