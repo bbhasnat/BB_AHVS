@@ -138,6 +138,13 @@ AHVS supports four usage modes depending on your workflow. All four produce iden
 
 Just describe what you want in natural language. No commands to memorize.
 
+**Brainstorming before building:**
+```
+> I have customer feedback data in emails.csv — help me figure out what to build
+```
+
+The `ahvs_brainstorm` skill will explore your data, ask clarifying questions, propose 2-3 approaches with trade-offs, and write a design doc. No code runs until you approve the design.
+
 **Onboarding a new repo:**
 ```
 > Onboard /path/to/my-project for AHVS — I want to improve precision without tanking F1
@@ -225,8 +232,8 @@ Your only manual step is clicking checkboxes in the browser. For fully automatic
 
 | Scenario | Recommended mode |
 |----------|-----------------|
-| First time using AHVS | **Conversational** — Claude guides you through onboarding |
-| Exploring what to optimize | **Conversational** — describe goals in natural language |
+| First time using AHVS | **Brainstorm** → **Genesis** → **Conversational** |
+| Exploring what to optimize | **Brainstorm** — design before building |
 | Running a specific experiment | **CLI** or **Conversational** — both work equally |
 | CI/CD integration | **CLI** with `--auto-approve` |
 | Supervised execution with bug-fixing | **Multi-agent** — observer catches and fixes framework bugs |
@@ -510,6 +517,10 @@ Genesis creates a project with `.ahvs/baseline_metric.json`, registers it in `~/
 **Step-by-step workflow:**
 
 ```bash
+# Step 0 (optional): Brainstorm — explore the problem before committing
+# In Claude Code: /ahvs_brainstorm
+# Produces a design doc in docs/ahvs/designs/ with pre-filled genesis inputs
+
 # Step 1: Genesis creates a new project
 ahvs genesis -p "sentiment classification" -d emails.csv -o /tmp/my_classifier
 
@@ -1015,6 +1026,9 @@ ahvs/
 └── references/
     ├── agent_prompts.md           # Executor + observer prompts with placeholders
     └── failure_classification.md  # FRAMEWORK_BUG / HYPOTHESIS_MISS / AMBIGUOUS rules
+
+.claude/skills/ahvs_brainstorm/    # Claude Code brainstorm skill
+└── SKILL.md                       # Pre-genesis design exploration: problem -> design doc
 
 .claude/skills/ahvs_genesis/       # Claude Code genesis skill
 └── SKILL.md                       # Interactive wizard: data -> project with baseline
