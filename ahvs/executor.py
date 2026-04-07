@@ -1497,6 +1497,19 @@ def _execute_human_selection(
 
     hypotheses_text = hyp_path.read_text(encoding="utf-8")
     hypotheses = _parse_hypotheses(hypotheses_text)
+
+    # ── Apply CLI hypothesis modifications (--add/--edit/--insert) ────
+    if config.hypothesis_ops:
+        from ahvs.hypothesis_ops import apply_ops_and_rewrite
+        hypotheses = apply_ops_and_rewrite(
+            hypotheses, config.hypothesis_ops, hyp_path,
+        )
+        hypotheses_text = hyp_path.read_text(encoding="utf-8")
+        print(
+            f"[AHVS] Applied {len(config.hypothesis_ops)} hypothesis modification(s): "
+            f"now {len(hypotheses)} hypotheses"
+        )
+
     all_ids = [h["id"] for h in hypotheses]
 
     # ── Mode 1: Pre-specified selection.json ──────────────────────────

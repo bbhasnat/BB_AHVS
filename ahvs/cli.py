@@ -10,6 +10,57 @@ from pathlib import Path
 from typing import cast
 
 
+def _parse_hypothesis_ops(args: argparse.Namespace) -> list[dict]:
+    """Parse --add/--edit/--insert-hypothesis flags into a list of ops."""
+    ops: list[dict] = []
+    for raw in getattr(args, "add_hypotheses", []) or []:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            print(f"Error: --add-hypothesis: invalid JSON: {e}", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(data, dict) or "description" not in data:
+            print("Error: --add-hypothesis requires at least 'description' field", file=sys.stderr)
+            sys.exit(1)
+        data["op"] = "add"
+        data.setdefault("type", "code_change")
+        ops.append(data)
+
+    for raw in getattr(args, "edit_hypotheses", []) or []:
+        m = re.match(r"^(H\d+)\s*:\s*(.+)$", raw, re.IGNORECASE | re.DOTALL)
+        if not m:
+            print(f"Error: --edit-hypothesis: expected 'H<N>:{{...}}', got: {raw!r}", file=sys.stderr)
+            sys.exit(1)
+        hyp_id = m.group(1).upper()
+        try:
+            fields = json.loads(m.group(2))
+        except json.JSONDecodeError as e:
+            print(f"Error: --edit-hypothesis: invalid JSON after {hyp_id}: {e}", file=sys.stderr)
+            sys.exit(1)
+        ops.append({"op": "edit", "id": hyp_id, "fields": fields})
+
+    for raw in getattr(args, "insert_hypotheses", []) or []:
+        m = re.match(r"^(\d+)\s*:\s*(.+)$", raw, re.DOTALL)
+        if not m:
+            print(f"Error: --insert-hypothesis: expected 'POS:{{...}}', got: {raw!r}", file=sys.stderr)
+            sys.exit(1)
+        pos = int(m.group(1))
+        try:
+            data = json.loads(m.group(2))
+        except json.JSONDecodeError as e:
+            print(f"Error: --insert-hypothesis: invalid JSON: {e}", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(data, dict) or "description" not in data:
+            print("Error: --insert-hypothesis requires at least 'description' field", file=sys.stderr)
+            sys.exit(1)
+        data["op"] = "insert"
+        data["position"] = pos
+        data.setdefault("type", "code_change")
+        ops.append(data)
+
+    return ops
+
+
 def cmd_ahvs(args: argparse.Namespace) -> int:
     """Run one AHVS hypothesis-validation cycle."""
     from pathlib import Path as _Path
@@ -40,6 +91,8 @@ def cmd_ahvs(args: argparse.Namespace) -> int:
         if not _skills_path:
             _skills_path = _pack_dir / f"{domain}_skills.yaml"
 
+    hypothesis_ops = _parse_hypothesis_ops(args)
+
     config = AHVSConfig(
         repo_path=repo_path,
         question=args.question,
@@ -59,6 +112,7 @@ def cmd_ahvs(args: argparse.Namespace) -> int:
         acp_timeout_sec=getattr(args, "acp_timeout_sec", 1800) or 1800,
         eval_timeout_sec=getattr(args, "eval_timeout_sec", 600) or 600,
         cache_enabled=not getattr(args, "no_cache", False),
+        hypothesis_ops=hypothesis_ops,
     )
 
     from_stage: AHVSStage | None = None
@@ -618,6 +672,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-cache", action="store_true",
         help="Disable LLM response cache (also controllable via LLM_CACHE_ENABLED=false)",
+    )
+
+    # ── Hypothesis modification flags ────────────────────────────────────
+    parser.add_argument(
+        "--add-hypothesis", action="append", default=[], dest="add_hypotheses",
+        metavar="JSON",
+        help=(
+            "Add a custom hypothesis (repeatable). JSON object with at least "
+            "'type' and 'description'. Example: "
+            """'{"type":"code_change","description":"Refactor tokenizer","rationale":"..."}' """
+            "Appended after LLM-generated hypotheses with the next available ID."
+        ),
+    )
+    parser.add_argument(
+        "--edit-hypothesis", action="append", default=[], dest="edit_hypotheses",
+        metavar="ID:JSON",
+        help=(
+            "Edit fields of a generated hypothesis (repeatable). Format: "
+            "'H2:{\"description\":\"new desc\"}'. Merges the JSON fields into the "
+            "existing hypothesis, leaving other fields unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--insert-hypothesis", action="append", default=[], dest="insert_hypotheses",
+        metavar="POS:JSON",
+        help=(
+            "Insert a custom hypothesis at a specific position (repeatable). "
+            "Format: '2:{\"type\":\"code_change\",\"description\":\"...\"}'. "
+            "1-indexed position; hypotheses after the insertion point are renumbered."
+        ),
     )
 
     args = parser.parse_args(argv)

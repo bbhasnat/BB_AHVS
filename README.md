@@ -549,6 +549,9 @@ ahvs [options]
 | `--max-lesson-cycles` | `5` | Load lessons from last K recent non-failed cycle IDs (0 = unlimited) |
 | `--auto-approve` | off | Skip interactive gate; run all hypotheses |
 | `--selection` | none | Pre-specify hypotheses to run (e.g. `H1,H3`). For conversational/agent-driven mode. |
+| `--add-hypothesis` | none | Add a custom hypothesis (repeatable). JSON: `'{"type":"code_change","description":"..."}'` |
+| `--edit-hypothesis` | none | Edit fields of a generated hypothesis (repeatable). Format: `'H2:{"description":"..."}'` |
+| `--insert-hypothesis` | none | Insert a hypothesis at position N (repeatable). Format: `'2:{"type":"...","description":"..."}'` |
 | `--from-stage` | *(stage 1)* | Resume from a specific stage name |
 | `--until-stage` | *(last stage)* | Stop after this stage (e.g. `AHVS_HYPOTHESIS_GEN`). Useful for split workflows — generate hypotheses, select via GUI, then resume. |
 | `--resume` | off | Resume from last written checkpoint |
@@ -1324,8 +1327,11 @@ AHVS already has a strong generic execution contract: repo + baseline metric + `
 
 #### UX & distribution *(priority)*
 
-1. **CLI + GUI hypothesis add/insert/edit** *(priority)*
-   Allow operators to manually add, insert, or edit hypotheses via CLI flags and the browser-based GUI before execution — not just select/deselect from LLM-generated candidates. This is the highest-priority UX improvement: it unblocks human-in-the-loop workflows where domain experts want to inject their own ideas alongside LLM-generated ones.
+1. ~~**CLI + GUI hypothesis add/insert/edit**~~ **DONE**
+   Operators can now add, insert, edit, reorder, and remove hypotheses via both CLI flags and the browser-based GUI before execution.
+   - **CLI:** `--add-hypothesis '{"type":"code_change","description":"..."}'` (repeatable), `--edit-hypothesis 'H2:{"description":"..."}'`, `--insert-hypothesis '2:{"type":"...","description":"..."}'`
+   - **GUI:** The hypothesis selector now has Add, Edit, Move Up/Down, and Remove buttons on every card. Changes are persisted to `hypotheses.md` on submit.
+   - Modifications are applied at the start of Stage 4 (human selection), after hypothesis generation but before selection.
 2. ~~**Installable plugin / skills / installer**~~ **DONE**
    Implemented: `./install.sh` one-command installer, `ahvs install` / `ahvs update` / `ahvs uninstall` CLI subcommands, skills bundled in wheel via `hatch force-include`, skills auto-copied to `~/.claude/skills/` for global availability.
 3. ~~**Package & distribution**~~ **DONE**

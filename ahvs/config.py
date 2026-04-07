@@ -63,6 +63,13 @@ class AHVSConfig:
     acp_session_name: str = "ahvs"
     acp_timeout_sec: int = 1800  # per-prompt timeout
 
+    # ── Hypothesis modifications (CLI --add/--edit/--insert-hypothesis) ───
+    hypothesis_ops: list = field(default_factory=list)
+    # Each op is a dict: {"op": "add"|"edit"|"insert", ...fields}
+    # add:    {"op": "add", "type": ..., "description": ..., ...}
+    # edit:   {"op": "edit", "id": "H2", "fields": {"description": ...}}
+    # insert: {"op": "insert", "position": 2, "type": ..., "description": ..., ...}
+
     def __post_init__(self) -> None:
         self.repo_path = Path(self.repo_path).resolve()
         if self.run_dir is None:
@@ -128,4 +135,5 @@ class AHVSConfig:
             acp_timeout_sec=getattr(args, "acp_timeout_sec", 1800) or 1800,
             eval_timeout_sec=getattr(args, "eval_timeout_sec", 600) or 600,
             cache_enabled=not getattr(args, "no_cache", False),
+            hypothesis_ops=getattr(args, "hypothesis_ops", []) or [],
         )

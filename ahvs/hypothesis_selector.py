@@ -3,6 +3,8 @@
 Reads hypotheses.md from a cycle directory, serves a checkbox form on localhost,
 waits for the human to submit their selection, then writes selection.json.
 
+Supports inline add, edit, reorder, and delete of hypotheses before selection.
+
 Usage (called by team lead between stage gen and stage exec):
     python -m ahvs.hypothesis_selector <cycle_dir>
 
@@ -47,6 +49,21 @@ def _parse_hypotheses(text: str) -> list[dict]:
             hyp[field] = m.group(1).strip() if m else ""
         hypotheses.append(hyp)
     return hypotheses
+
+
+# ---------------------------------------------------------------------------
+# Valid hypothesis types
+# ---------------------------------------------------------------------------
+
+HYPOTHESIS_TYPES = [
+    "code_change",
+    "prompt_rewrite",
+    "config_change",
+    "architecture_change",
+    "model_comparison",
+    "dspy_optimize",
+    "multi_llm_judge",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -101,14 +118,17 @@ _HTML_TEMPLATE = """\
       border: 1px solid #2d3448;
       border-radius: 10px;
       padding: 1.2rem 1.4rem;
-      cursor: pointer;
       transition: border-color 0.15s, background 0.15s;
-      display: flex;
-      gap: 1rem;
-      align-items: flex-start;
     }}
     .card:hover {{ border-color: #6366f1; background: #232840; }}
     .card.selected {{ border-color: #a78bfa; background: #1a1d35; }}
+    .card.editing {{ border-color: #f59e0b; background: #1a1d2a; }}
+    .card-top {{
+      display: flex;
+      gap: 1rem;
+      align-items: flex-start;
+      cursor: pointer;
+    }}
     .card input[type=checkbox] {{
       width: 18px;
       height: 18px;
@@ -137,6 +157,14 @@ _HTML_TEMPLATE = """\
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }}
+    .badge.operator {{
+      background: #713f12;
+      color: #fbbf24;
+    }}
+    .badge.edited {{
+      background: #4c1d95;
+      color: #c084fc;
+    }}
     .card-desc {{
       font-size: 0.9rem;
       color: #cbd5e1;
@@ -154,12 +182,77 @@ _HTML_TEMPLATE = """\
       color: #475569;
       margin-top: 0.4rem;
     }}
+    .card-actions {{
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.7rem;
+      flex-wrap: wrap;
+    }}
+    .card-btn {{
+      padding: 0.3rem 0.7rem;
+      border-radius: 5px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border: 1px solid #2d3448;
+      background: #161827;
+      color: #94a3b8;
+      cursor: pointer;
+      transition: all 0.15s;
+    }}
+    .card-btn:hover {{ border-color: #6366f1; color: #e2e8f0; }}
+    .card-btn.danger:hover {{ border-color: #ef4444; color: #fca5a5; }}
+    /* Edit form inside card */
+    .edit-form {{
+      display: none;
+      margin-top: 0.8rem;
+      padding-top: 0.8rem;
+      border-top: 1px solid #2d3448;
+    }}
+    .card.editing .edit-form {{ display: block; }}
+    .card.editing .card-top {{ opacity: 0.5; pointer-events: none; }}
+    .form-row {{
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 0.6rem;
+      align-items: center;
+    }}
+    .form-row label {{
+      font-size: 0.8rem;
+      color: #94a3b8;
+      min-width: 90px;
+      text-align: right;
+    }}
+    .form-row input, .form-row textarea, .form-row select {{
+      flex: 1;
+      background: #0f1117;
+      border: 1px solid #2d3448;
+      border-radius: 5px;
+      color: #e2e8f0;
+      padding: 0.4rem 0.6rem;
+      font-size: 0.85rem;
+      font-family: inherit;
+    }}
+    .form-row textarea {{
+      resize: vertical;
+      min-height: 60px;
+    }}
+    .form-row input:focus, .form-row textarea:focus, .form-row select:focus {{
+      outline: none;
+      border-color: #6366f1;
+    }}
+    .edit-actions {{
+      display: flex;
+      gap: 0.5rem;
+      justify-content: flex-end;
+      margin-top: 0.5rem;
+    }}
     .actions {{
       max-width: 860px;
       margin: 2rem auto 0;
       display: flex;
       gap: 1rem;
       align-items: center;
+      flex-wrap: wrap;
     }}
     .btn {{
       padding: 0.65rem 1.5rem;
@@ -180,6 +273,11 @@ _HTML_TEMPLATE = """\
       color: #94a3b8;
       border: 1px solid #2d3448;
     }}
+    .btn-add {{
+      background: #065f46;
+      color: #6ee7b7;
+      border: 1px solid #059669;
+    }}
     .counter {{
       font-size: 0.85rem;
       color: #64748b;
@@ -197,6 +295,33 @@ _HTML_TEMPLATE = """\
       color: #86efac;
       font-weight: 600;
     }}
+    /* Add hypothesis modal */
+    .modal-overlay {{
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }}
+    .modal-overlay.visible {{ display: flex; }}
+    .modal {{
+      background: #1e2130;
+      border: 1px solid #2d3448;
+      border-radius: 12px;
+      padding: 2rem;
+      width: 90%;
+      max-width: 600px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }}
+    .modal h2 {{
+      font-size: 1.2rem;
+      color: #a78bfa;
+      margin-bottom: 1.2rem;
+    }}
+    .modal .form-row label {{ min-width: 110px; }}
   </style>
 </head>
 <body>
@@ -210,84 +335,267 @@ _HTML_TEMPLATE = """\
     Selection submitted. You can close this tab.
   </div>
 
-  <form method="POST" action="/submit" id="form">
+  <form id="form" onsubmit="return false;">
     <div class="cards" id="cards">
 {cards_html}
     </div>
     <div class="actions">
+      <button type="button" class="btn btn-add" onclick="showAddModal()">+ Add Hypothesis</button>
       <button type="button" class="btn btn-secondary" onclick="selectAll()">Select All</button>
       <button type="button" class="btn btn-secondary" onclick="selectNone()">Clear</button>
       <span class="counter"><span id="count">0</span> selected</span>
-      <button type="submit" class="btn btn-primary">Submit Selection →</button>
+      <button type="button" class="btn btn-primary" onclick="submitSelection()">Submit Selection &rarr;</button>
     </div>
   </form>
 
+  <!-- Add Hypothesis Modal -->
+  <div class="modal-overlay" id="addModal">
+    <div class="modal">
+      <h2>Add Custom Hypothesis</h2>
+      <div class="form-row">
+        <label for="new-type">Type</label>
+        <select id="new-type">
+{type_options}
+        </select>
+      </div>
+      <div class="form-row">
+        <label for="new-desc">Description</label>
+        <textarea id="new-desc" placeholder="What to change and how..."></textarea>
+      </div>
+      <div class="form-row">
+        <label for="new-rationale">Rationale</label>
+        <textarea id="new-rationale" placeholder="Why this might improve the metric..."></textarea>
+      </div>
+      <div class="form-row">
+        <label for="new-cost">Est. Cost</label>
+        <select id="new-cost">
+          <option value="">—</option>
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+      <div class="edit-actions">
+        <button type="button" class="btn btn-secondary" onclick="hideAddModal()">Cancel</button>
+        <button type="button" class="btn btn-add" onclick="addHypothesis()">Add</button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    function updateCount() {{
-      var n = document.querySelectorAll('input[type=checkbox]:checked').length;
-      document.getElementById('count').textContent = n;
-      document.querySelectorAll('.card').forEach(function(card) {{
-        var cb = card.querySelector('input[type=checkbox]');
-        card.classList.toggle('selected', cb.checked);
+    // ── State ──
+    var hypotheses = {hypotheses_json};
+    var nextNum = hypotheses.length + 1;
+
+    function render() {{
+      var container = document.getElementById('cards');
+      container.innerHTML = '';
+      hypotheses.forEach(function(h, idx) {{
+        var card = document.createElement('div');
+        card.className = 'card' + (h._selected ? ' selected' : '');
+        card.dataset.id = h.id;
+        card.dataset.idx = idx;
+
+        var sourceBadge = '';
+        if (h._source === 'operator') sourceBadge = '<span class="badge operator">custom</span>';
+        else if (h._edited) sourceBadge = '<span class="badge edited">edited</span>';
+
+        var costHtml = h.estimated_cost ? '<p class="cost">Cost: ' + esc(h.estimated_cost) + '</p>' : '';
+
+        card.innerHTML =
+          '<div class="card-top" onclick="toggleSelect(' + idx + ', event)">' +
+            '<input type="checkbox"' + (h._selected ? ' checked' : '') + ' onclick="toggleSelect(' + idx + ', event)">' +
+            '<div class="card-body">' +
+              '<div class="card-title">' + esc(h.id) + '<span class="badge">' + esc(h.type || 'code_change') + '</span>' + sourceBadge + '</div>' +
+              '<p class="card-desc">' + esc(h.description) + '</p>' +
+              '<p class="card-rationale"><strong>Rationale:</strong> ' + esc(h.rationale) + '</p>' +
+              costHtml +
+            '</div>' +
+          '</div>' +
+          '<div class="card-actions">' +
+            '<button class="card-btn" onclick="startEdit(' + idx + ')">Edit</button>' +
+            (idx > 0 ? '<button class="card-btn" onclick="moveUp(' + idx + ')">Move Up</button>' : '') +
+            (idx < hypotheses.length - 1 ? '<button class="card-btn" onclick="moveDown(' + idx + ')">Move Down</button>' : '') +
+            '<button class="card-btn danger" onclick="removeHyp(' + idx + ')">Remove</button>' +
+          '</div>' +
+          '<div class="edit-form" id="editform-' + idx + '">' +
+            '<div class="form-row">' +
+              '<label>Type</label>' +
+              '<select id="edit-type-' + idx + '">' + typeOptionsHtml(h.type) + '</select>' +
+            '</div>' +
+            '<div class="form-row">' +
+              '<label>Description</label>' +
+              '<textarea id="edit-desc-' + idx + '">' + esc(h.description) + '</textarea>' +
+            '</div>' +
+            '<div class="form-row">' +
+              '<label>Rationale</label>' +
+              '<textarea id="edit-rationale-' + idx + '">' + esc(h.rationale) + '</textarea>' +
+            '</div>' +
+            '<div class="form-row">' +
+              '<label>Est. Cost</label>' +
+              '<select id="edit-cost-' + idx + '">' + costOptionsHtml(h.estimated_cost) + '</select>' +
+            '</div>' +
+            '<div class="edit-actions">' +
+              '<button class="btn btn-secondary" onclick="cancelEdit(' + idx + ')">Cancel</button>' +
+              '<button class="btn btn-add" onclick="saveEdit(' + idx + ')">Save</button>' +
+            '</div>' +
+          '</div>';
+
+        container.appendChild(card);
       }});
+      updateCount();
+    }}
+
+    function esc(s) {{ return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }}
+
+    var validTypes = {types_json};
+    function typeOptionsHtml(current) {{
+      return validTypes.map(function(t) {{
+        return '<option value="' + t + '"' + (t === current ? ' selected' : '') + '>' + t + '</option>';
+      }}).join('');
+    }}
+    function costOptionsHtml(current) {{
+      var opts = ['', 'low', 'medium', 'high'];
+      var labels = ['—', 'Low', 'Medium', 'High'];
+      return opts.map(function(v, i) {{
+        return '<option value="' + v + '"' + (v === (current || '').toLowerCase() ? ' selected' : '') + '>' + labels[i] + '</option>';
+      }}).join('');
+    }}
+
+    // ── Selection ──
+    function toggleSelect(idx, e) {{
+      e.stopPropagation();
+      hypotheses[idx]._selected = !hypotheses[idx]._selected;
+      render();
     }}
     function selectAll() {{
-      document.querySelectorAll('input[type=checkbox]').forEach(function(cb) {{ cb.checked = true; }});
-      updateCount();
+      hypotheses.forEach(function(h) {{ h._selected = true; }});
+      render();
     }}
     function selectNone() {{
-      document.querySelectorAll('input[type=checkbox]').forEach(function(cb) {{ cb.checked = false; }});
-      updateCount();
+      hypotheses.forEach(function(h) {{ h._selected = false; }});
+      render();
     }}
-    document.querySelectorAll('.card').forEach(function(card) {{
-      card.addEventListener('click', function(e) {{
-        if (e.target.tagName !== 'INPUT') {{
-          var cb = card.querySelector('input[type=checkbox]');
-          cb.checked = !cb.checked;
-          updateCount();
-        }}
+    function updateCount() {{
+      var n = hypotheses.filter(function(h) {{ return h._selected; }}).length;
+      document.getElementById('count').textContent = n;
+    }}
+
+    // ── Edit ──
+    function startEdit(idx) {{
+      var card = document.querySelector('[data-idx="' + idx + '"]');
+      card.classList.add('editing');
+    }}
+    function cancelEdit(idx) {{
+      var card = document.querySelector('[data-idx="' + idx + '"]');
+      card.classList.remove('editing');
+    }}
+    function saveEdit(idx) {{
+      var h = hypotheses[idx];
+      h.type = document.getElementById('edit-type-' + idx).value;
+      h.description = document.getElementById('edit-desc-' + idx).value;
+      h.rationale = document.getElementById('edit-rationale-' + idx).value;
+      h.estimated_cost = document.getElementById('edit-cost-' + idx).value;
+      h._edited = true;
+      render();
+    }}
+
+    // ── Reorder ──
+    function moveUp(idx) {{
+      if (idx <= 0) return;
+      var tmp = hypotheses[idx - 1];
+      hypotheses[idx - 1] = hypotheses[idx];
+      hypotheses[idx] = tmp;
+      renumber();
+      render();
+    }}
+    function moveDown(idx) {{
+      if (idx >= hypotheses.length - 1) return;
+      var tmp = hypotheses[idx + 1];
+      hypotheses[idx + 1] = hypotheses[idx];
+      hypotheses[idx] = tmp;
+      renumber();
+      render();
+    }}
+    function renumber() {{
+      hypotheses.forEach(function(h, i) {{ h.id = 'H' + (i + 1); }});
+    }}
+
+    // ── Add ──
+    function showAddModal() {{ document.getElementById('addModal').classList.add('visible'); }}
+    function hideAddModal() {{ document.getElementById('addModal').classList.remove('visible'); }}
+    function addHypothesis() {{
+      var desc = document.getElementById('new-desc').value.trim();
+      if (!desc) {{ alert('Description is required.'); return; }}
+      hypotheses.push({{
+        id: 'H' + nextNum++,
+        type: document.getElementById('new-type').value,
+        description: desc,
+        rationale: document.getElementById('new-rationale').value.trim() || 'Operator-provided hypothesis',
+        estimated_cost: document.getElementById('new-cost').value,
+        _source: 'operator',
+        _selected: true
       }});
-    }});
-    document.querySelectorAll('input[type=checkbox]').forEach(function(cb) {{
-      cb.addEventListener('change', updateCount);
-    }});
-    document.getElementById('form').addEventListener('submit', function(e) {{
-      e.preventDefault();
-      var selected = Array.from(document.querySelectorAll('input[type=checkbox]:checked'))
-                         .map(function(cb) {{ return cb.value; }});
+      renumber();
+      hideAddModal();
+      // Clear form
+      document.getElementById('new-desc').value = '';
+      document.getElementById('new-rationale').value = '';
+      render();
+    }}
+
+    // ── Remove ──
+    function removeHyp(idx) {{
+      if (!confirm('Remove ' + hypotheses[idx].id + '?')) return;
+      hypotheses.splice(idx, 1);
+      renumber();
+      render();
+    }}
+
+    // ── Submit ──
+    function submitSelection() {{
+      var selected = hypotheses.filter(function(h) {{ return h._selected; }})
+                               .map(function(h) {{ return h.id; }});
       if (selected.length === 0) {{
         alert('Please select at least one hypothesis.');
         return;
       }}
+      // Clean internal flags before sending
+      var cleaned = hypotheses.map(function(h) {{
+        var c = {{}};
+        c.id = h.id;
+        c.type = h.type || 'code_change';
+        c.description = h.description || '';
+        c.rationale = h.rationale || '';
+        c.estimated_cost = h.estimated_cost || '';
+        if (h._source) c._source = h._source;
+        if (h._edited) c._edited = true;
+        return c;
+      }});
       fetch('/submit', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
-        body: JSON.stringify({{selected: selected}})
+        body: JSON.stringify({{selected: selected, hypotheses: cleaned}})
       }}).then(function(r) {{
         if (r.ok) {{
           document.getElementById('banner').style.display = 'block';
           document.getElementById('form').style.opacity = '0.4';
           document.getElementById('form').style.pointerEvents = 'none';
+          document.getElementById('addModal').classList.remove('visible');
           window.scrollTo(0, 0);
         }}
       }});
-    }});
-    updateCount();
+    }}
+
+    // ── Init ──
+    hypotheses.forEach(function(h) {{ h._selected = true; }});
+    render();
   </script>
 </body>
 </html>
 """
 
-_CARD_TEMPLATE = """\
-      <label class="card" for="cb_{hyp_id}">
-        <input type="checkbox" id="cb_{hyp_id}" name="hypothesis" value="{hyp_id}" checked>
-        <div class="card-body">
-          <div class="card-title">{hyp_id}<span class="badge">{hyp_type}</span></div>
-          <p class="card-desc">{description}</p>
-          <p class="card-rationale"><strong>Rationale:</strong> {rationale}</p>
-          {cost_html}
-        </div>
-      </label>"""
+_CARD_TEMPLATE = ""  # Cards are now rendered client-side via JS
 
 
 # ---------------------------------------------------------------------------
@@ -298,25 +606,38 @@ _CARD_TEMPLATE = """\
 class _SelectionState:
     def __init__(self) -> None:
         self.selected: list[str] = []
+        self.hypotheses: list[dict] | None = None  # modified list from GUI
         self.done = threading.Event()
 
 
 def _build_html(hypotheses: list[dict], cycle_dir: Path, question: str) -> str:
-    cards = []
-    for h in hypotheses:
-        cost = h.get("estimated_cost", "").strip()
-        cost_html = f'<p class="cost">Cost: {html.escape(cost)}</p>' if cost else ""
-        cards.append(_CARD_TEMPLATE.format(
-            hyp_id=html.escape(h["id"]),
-            hyp_type=html.escape(h.get("type", "unknown")),
-            description=html.escape(h.get("description", "")),
-            rationale=html.escape(h.get("rationale", "")),
-            cost_html=cost_html,
-        ))
+    # Build type <option> tags for the add modal
+    type_options = "\n".join(
+        f'          <option value="{t}"'
+        + (' selected' if t == 'code_change' else '')
+        + f'>{t}</option>'
+        for t in HYPOTHESIS_TYPES
+    )
+    # Prepare JSON-safe hypothesis data
+    hyp_json = json.dumps([
+        {
+            "id": h["id"],
+            "type": h.get("type", "code_change"),
+            "description": h.get("description", ""),
+            "rationale": h.get("rationale", ""),
+            "estimated_cost": h.get("estimated_cost", ""),
+            "_source": h.get("_source", "llm"),
+            "_edited": h.get("_edited", False),
+        }
+        for h in hypotheses
+    ])
     return _HTML_TEMPLATE.format(
         question=html.escape(question),
         cycle_dir=html.escape(str(cycle_dir)),
-        cards_html="\n".join(cards),
+        cards_html="      <!-- rendered client-side -->",
+        type_options=type_options,
+        hypotheses_json=hyp_json,
+        types_json=json.dumps(HYPOTHESIS_TYPES),
     )
 
 
@@ -343,8 +664,12 @@ def _make_handler(html_content: str, state: _SelectionState):
             try:
                 data = json.loads(raw)
                 state.selected = [str(s).upper() for s in data.get("selected", [])]
+                # Capture modified hypothesis list from GUI
+                if "hypotheses" in data and isinstance(data["hypotheses"], list):
+                    state.hypotheses = data["hypotheses"]
             except (json.JSONDecodeError, TypeError):
                 state.selected = []
+                state.hypotheses = None
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -368,7 +693,9 @@ def run_selector(
 ) -> list[str]:
     """Serve the hypothesis selection GUI and return the chosen IDs.
 
-    Blocks until the human submits their selection.
+    Blocks until the human submits their selection. If the human adds, edits,
+    reorders, or removes hypotheses via the GUI, hypotheses.md is rewritten
+    before returning.
 
     Args:
         cycle_dir: Path to the AHVS cycle directory containing hypotheses.md.
@@ -416,6 +743,7 @@ def run_selector(
     print(f"  HYPOTHESIS SELECTOR — http://localhost:{actual_port}/")
     print(f"{'='*60}")
     print(f"  {len(hypotheses)} hypotheses: {[h['id'] for h in hypotheses]}")
+    print(f"  You can add, edit, reorder, or remove hypotheses in the GUI.")
     print(f"  Waiting for your selection... (submit in browser)")
     print(f"{'='*60}\n")
 
@@ -427,6 +755,14 @@ def run_selector(
 
     state.done.wait()
     server.shutdown()
+
+    # If the GUI sent back a modified hypothesis list, rewrite hypotheses.md
+    if state.hypotheses is not None:
+        from ahvs.hypothesis_ops import hypotheses_to_markdown
+        hyp_path.write_text(
+            hypotheses_to_markdown(state.hypotheses), encoding="utf-8"
+        )
+        print(f"[selector] Rewrote hypotheses.md with {len(state.hypotheses)} hypotheses (GUI modifications)")
 
     # Write selection.json into the cycle dir
     selection_data = {
