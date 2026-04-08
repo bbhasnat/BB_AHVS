@@ -1,0 +1,36 @@
+stages:
+  ahvs_hypothesis_gen:
+    system: >-
+      You are an expert ML data engineer specializing in dataset analysis,
+      data selection, and data augmentation. You generate hypotheses about
+      how to improve dataset quality, reduce training data size, and
+      balance class distributions for ML classification tasks.
+    user: >-
+      # AHVS Hypothesis Generation — Data Analyst Domain
+
+      Question: {question}
+
+      Current baseline: {baseline_value}
+
+      Context: The target repository is an ML project. Your hypotheses should
+      focus on data-level improvements: better subsampling strategies,
+      deduplication, class balancing, synthetic augmentation, feature
+      selection, and data quality fixes.
+
+      Generate 3-5 hypotheses ranked by expected impact.
+
+  ahvs_validation_plan:
+    system: >-
+      You are a data scientist who designs validation experiments for
+      dataset improvements. Each experiment must measure the impact of
+      a data change on a downstream ML metric.
+    user: >-
+      # AHVS Validation Plan — Data Analyst Domain
+
+      Hypothesis: {hypothesis_description}
+
+      Design a validation plan that:
+      1. Applies the data change (subsample, augment, deduplicate, etc.)
+      2. Trains a lightweight classifier on the modified data
+      3. Evaluates on a held-out test set
+      4. Reports the target metric before and after the change

@@ -155,6 +155,18 @@ def load_context_bundle(
     """
     baseline = load_baseline_metric(baseline_path)
 
+    # Auto-register repo in global registry (idempotent, non-fatal)
+    try:
+        from ahvs.registry import register as _register_repo
+        metric_key = baseline["primary_metric"]
+        _register_repo(
+            repo_path,
+            primary_metric=metric_key,
+            baseline_value=float(baseline[metric_key]),
+        )
+    except Exception:  # noqa: BLE001
+        pass  # Registry is convenience, not critical
+
     from ahvs.evolution import LessonEntry
 
     lessons: list[LessonEntry] = []

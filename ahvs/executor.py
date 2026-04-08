@@ -2671,6 +2671,43 @@ def _execute_report_and_memory(
             f"*Report generation failed: {exc}*"
         )
 
+    # Ensure the report contains the mandatory Final Summary & Findings section.
+    # If the LLM omitted it, append a structured fallback built from raw results.
+    if "Final Summary" not in report_text and "## Results table" not in report_text:
+        summary_table_lines = [
+            "| Hypothesis | Type | Metric | Delta | Verdict |",
+            "|---|---|---|---|---|",
+            f"| Baseline | — | {baseline['value']:.4f} | — | — |",
+        ]
+        for r in results:
+            verdict = "ADOPT" if r.improved else ("ERROR" if r.error else "No improvement")
+            summary_table_lines.append(
+                f"| {r.hypothesis_id} | {r.hypothesis_type} | "
+                f"{r.metric_value:.4f} | {r.delta:+.4f} ({r.delta_pct:+.1f}%) | {verdict} |"
+            )
+        recommendations = []
+        if best_result:
+            recommendations.append(
+                f"| 1 | Apply {best_result.hypothesis_id} "
+                f"({best_result.hypothesis_type}) | "
+                f"{metric_name} +{best_result.delta_pct:.1f}% |"
+            )
+        rec_table = (
+            "| Priority | Action | Expected Impact |\n|---|---|---|\n"
+            + "\n".join(recommendations)
+        ) if recommendations else "No hypotheses improved the metric this cycle."
+
+        summary_section = (
+            "\n\n---\n\n"
+            "## Final Summary & Findings\n\n"
+            f"**Objective:** {config.question}\n\n"
+            "### Results\n\n"
+            + "\n".join(summary_table_lines) + "\n\n"
+            "### Recommendations\n\n"
+            + rec_table + "\n"
+        )
+        report_text += summary_section
+
     (cycle_dir / "report.md").write_text(report_text, encoding="utf-8")
 
     # Write friction log (auto-generated from execution errors)

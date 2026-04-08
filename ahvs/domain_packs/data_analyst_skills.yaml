@@ -1,0 +1,67 @@
+skills:
+  - name: data_profiling
+    description: "Profile a dataset: load, infer schema, detect columns and labels, compute statistics."
+    invocation_template: |
+      from ahvs.data_analyst.profiler import profile_data
+      profile = profile_data("{data_path}")
+      print(profile.summary_for_llm())
+    applicable_types:
+      - data_analysis
+      - data_quality
+    required_tools: []
+
+  - name: class_balance_analysis
+    description: "Analyse class distribution, imbalance ratio, and entropy."
+    invocation_template: |
+      from ahvs.data_analyst import analyze
+      report = analyze("{data_path}", modules=["class_balance"], goal="class distribution")
+    applicable_types:
+      - data_analysis
+    required_tools: []
+
+  - name: text_statistics
+    description: "Compute text length, vocabulary, and duplicate statistics."
+    invocation_template: |
+      from ahvs.data_analyst import analyze
+      report = analyze("{data_path}", modules=["text_stats"], goal="text analysis")
+    applicable_types:
+      - data_analysis
+    required_tools: []
+
+  - name: duplicate_detection
+    description: "Detect exact and fuzzy duplicates via MinHash LSH."
+    invocation_template: |
+      from ahvs.data_analyst import analyze
+      report = analyze("{data_path}", modules=["duplicates"], goal="deduplication")
+    applicable_types:
+      - data_quality
+    required_tools:
+      - datasketch
+
+  - name: intelligent_subsampling
+    description: "Select a representative subsample using stratified, balanced, or diversity strategies."
+    invocation_template: |
+      from ahvs.data_analyst import analyze
+      report = analyze("{data_path}", modules=["subsample"], goal="data selection")
+    applicable_types:
+      - data_selection
+    required_tools: []
+
+  - name: train_test_split
+    description: "Split dataset into train/val/test partitions with stratification."
+    invocation_template: |
+      from ahvs.data_analyst import analyze
+      report = analyze("{data_path}", modules=["split"], goal="data splitting")
+    applicable_types:
+      - data_preparation
+    required_tools: []
+
+  - name: full_eda
+    description: "Run full exploratory data analysis with statistics, quality checks, and visualizations."
+    invocation_template: |
+      from ahvs.data_analyst import analyze
+      report = analyze("{data_path}", goal="{goal}")
+    applicable_types:
+      - data_analysis
+      - data_quality
+    required_tools: []

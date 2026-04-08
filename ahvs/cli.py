@@ -538,6 +538,85 @@ def cmd_uninstall(argv: list[str]) -> int:
     return run_uninstall(quiet=args.quiet)
 
 
+# -------------------------------------------------------------------
+# ahvs data_analyst
+# -------------------------------------------------------------------
+
+def cmd_data_analyst(argv: list[str]) -> int:
+    """Run the data analyst pipeline on a dataset."""
+    import logging
+
+    parser = argparse.ArgumentParser(
+        prog="ahvs data_analyst",
+        description="Analyse a dataset for ML readiness.",
+    )
+    parser.add_argument(
+        "--data", "-d", required=True,
+        help="Path to data file (CSV, Parquet, JSON, JSONL).",
+    )
+    parser.add_argument(
+        "--goal", "-g", default="",
+        help="Natural-language goal (e.g., 'build ABSA sentiment classifier').",
+    )
+    parser.add_argument(
+        "--task", "-t", default="classification",
+        help="Shorthand task type (default: classification).",
+    )
+    parser.add_argument(
+        "--modules", "-m", default=None,
+        help="Comma-separated module list (e.g., 'eda,class_balance,subsample').",
+    )
+    parser.add_argument(
+        "--output", "-o", default=None,
+        help="Output directory for results.",
+    )
+    parser.add_argument(
+        "--label", default=None,
+        help="Force a specific column as the label.",
+    )
+    parser.add_argument(
+        "--inputs", default=None,
+        help="Comma-separated list of input columns.",
+    )
+    parser.add_argument(
+        "--nrows", type=int, default=None,
+        help="Limit rows for quick profiling.",
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Enable verbose logging.",
+    )
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
+    modules_list = args.modules.split(",") if args.modules else None
+    input_list = args.inputs.split(",") if args.inputs else None
+
+    from ahvs.data_analyst import analyze
+
+    report = analyze(
+        data_path=args.data,
+        goal=args.goal,
+        task=args.task,
+        modules=modules_list,
+        output_dir=args.output,
+        label_hint=args.label,
+        input_hint=input_list,
+        nrows=args.nrows,
+    )
+
+    print(f"\nAnalysis complete. Completeness: {report.completeness_score():.0f}%")
+    print(f"Report: {report.markdown_path}")
+    if report.json_path:
+        print(f"JSON:   {report.json_path}")
+
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Intercept subcommands before main argparse
     effective_argv = argv if argv is not None else sys.argv[1:]
@@ -549,6 +628,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_update(effective_argv[1:])
     if effective_argv and effective_argv[0] == "uninstall":
         return cmd_uninstall(effective_argv[1:])
+    if effective_argv and effective_argv[0] == "data_analyst":
+        return cmd_data_analyst(effective_argv[1:])
 
     parser = argparse.ArgumentParser(
         prog="ahvs",
