@@ -120,17 +120,27 @@ def _apply_insert(hypotheses: list[dict], op: dict) -> list[dict]:
     return hypotheses
 
 
+def _collapse_multiline(text: str) -> str:
+    """Collapse multiline text to single line for markdown field serialization.
+
+    The markdown regex parser expects each field on a single line.
+    Newlines are replaced with ' — ' to preserve readability.
+    """
+    return " — ".join(line.strip() for line in text.splitlines() if line.strip())
+
+
 def hypotheses_to_markdown(hypotheses: list[dict]) -> str:
     """Serialize a hypothesis list back to the hypotheses.md format.
 
     Produces the canonical markdown format that _parse_hypotheses() can read.
+    Multiline text in description/rationale is collapsed to single lines.
     """
     blocks: list[str] = []
     for h in hypotheses:
         lines = [f"## {h['id']}"]
         lines.append(f"**Type:** {h.get('type', 'code_change')}")
-        lines.append(f"**Description:** {h.get('description', '')}")
-        lines.append(f"**Rationale:** {h.get('rationale', '')}")
+        lines.append(f"**Description:** {_collapse_multiline(h.get('description', ''))}")
+        lines.append(f"**Rationale:** {_collapse_multiline(h.get('rationale', ''))}")
         if h.get("estimated_cost"):
             lines.append(f"**Estimated Cost:** {h['estimated_cost']}")
         tools = h.get("required_tools", [])

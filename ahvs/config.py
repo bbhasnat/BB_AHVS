@@ -103,6 +103,16 @@ class AHVSConfig:
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> "AHVSConfig":
+        # Parse hypothesis modification flags if present
+        hyp_ops = getattr(args, "hypothesis_ops", None)
+        if hyp_ops is None:
+            # Try parsing from raw CLI flags (--add/--edit/--insert-hypothesis)
+            try:
+                from ahvs.cli import _parse_hypothesis_ops
+                hyp_ops = _parse_hypothesis_ops(args)
+            except (ImportError, AttributeError):
+                hyp_ops = []
+
         return cls(
             repo_path=Path(args.repo),
             question=args.question,
@@ -135,5 +145,5 @@ class AHVSConfig:
             acp_timeout_sec=getattr(args, "acp_timeout_sec", 1800) or 1800,
             eval_timeout_sec=getattr(args, "eval_timeout_sec", 600) or 600,
             cache_enabled=not getattr(args, "no_cache", False),
-            hypothesis_ops=getattr(args, "hypothesis_ops", []) or [],
+            hypothesis_ops=hyp_ops or [],
         )

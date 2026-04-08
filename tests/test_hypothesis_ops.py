@@ -347,3 +347,123 @@ class TestCLIParsing:
         )
         ops = _parse_hypothesis_ops(ns)
         assert ops == []
+
+    def test_edit_rejects_non_object(self):
+        """--edit-hypothesis must be a JSON object, not an array or scalar."""
+        from ahvs.cli import _parse_hypothesis_ops
+        import argparse
+        ns = argparse.Namespace(
+            add_hypotheses=[],
+            edit_hypotheses=['H2:[1,2]'],
+            insert_hypotheses=[],
+        )
+        with pytest.raises(SystemExit):
+            _parse_hypothesis_ops(ns)
+
+    def test_edit_rejects_reserved_keys(self):
+        """--edit-hypothesis must not allow editing reserved keys like 'id'."""
+        from ahvs.cli import _parse_hypothesis_ops
+        import argparse
+        ns = argparse.Namespace(
+            add_hypotheses=[],
+            edit_hypotheses=['H2:{"id":"H999"}'],
+            insert_hypotheses=[],
+        )
+        with pytest.raises(SystemExit):
+            _parse_hypothesis_ops(ns)
+
+
+# ---------------------------------------------------------------------------
+# Regression: multiline text round-trip (Codex review fix)
+# ---------------------------------------------------------------------------
+
+class TestMultilineRoundTrip:
+    def test_multiline_description_survives_round_trip(self):
+        """Multiline description from GUI textarea should survive markdown round-trip."""
+        from ahvs.hypothesis_selector import _parse_hypotheses
+        hyps = [{
+            "id": "H1",
+            "type": "code_change",
+            "description": "Line one\nLine two\nLine three",
+            "rationale": "Single line rationale",
+            "estimated_cost": "low",
+        }]
+        md = hypotheses_to_markdown(hyps)
+        parsed = _parse_hypotheses(md)
+        assert len(parsed) == 1
+        # All content should be on one line (collapsed)
+        assert "\n" not in parsed[0]["description"]
+        # Content should be present
+        assert "Line one" in parsed[0]["description"]
+        assert "Line three" in parsed[0]["description"]
+
+    def test_multiline_rationale_survives_round_trip(self):
+        from ahvs.hypothesis_selector import _parse_hypotheses
+        hyps = [{
+            "id": "H1",
+            "type": "code_change",
+            "description": "Desc",
+            "rationale": "First reason\nSecond reason",
+            "estimated_cost": "",
+        }]
+        md = hypotheses_to_markdown(hyps)
+        parsed = _parse_hypotheses(md)
+        assert "First reason" in parsed[0]["rationale"]
+        assert "Second reason" in parsed[0]["rationale"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: XSS in _build_html (Codex review fix)
+# ---------------------------------------------------------------------------
+
+class TestXSSPrevention:
+    def test_script_tag_in_description_escaped(self):
+        """Hypothesis text containing </script> must not break the HTML."""
+        from ahvs.hypothesis_selector import _build_html
+        hyps = [{
+            "id": "H1",
+            "type": "code_change",
+            "description": '</script><script>alert("xss")</script>',
+            "rationale": "Test",
+            "estimated_cost": "",
+        }]
+        html_out = _build_html(hyps, Path("/tmp/test"), "test question")
+        # The literal </script> must not appear inside the <script> block
+        # (the safe serializer replaces < and > with unicode escapes)
+        script_start = html_out.index("<script>")
+        script_end = html_out.index("</script>", script_start)
+        script_body = html_out[script_start:script_end]
+        assert "</script>" not in script_body.replace("<script>", "", 1)
+        assert "\\u003c/script\\u003e" in html_out
+
+    def test_angle_brackets_escaped_in_json(self):
+        from ahvs.hypothesis_selector import _safe_json_for_script
+        result = _safe_json_for_script({"text": "<img onerror=alert(1)>"})
+        assert "<" not in result
+        assert ">" not in result
+        assert "\\u003c" in result
+        assert "\\u003e" in result
+
+
+# ---------------------------------------------------------------------------
+# Regression: required_tools preserved on selection-only submit
+# ---------------------------------------------------------------------------
+
+class TestFieldPreservation:
+    def test_required_tools_in_markdown_round_trip(self):
+        """required_tools must survive hypotheses_to_markdown → _parse_hypotheses."""
+        from ahvs.hypothesis_selector import _parse_hypotheses
+        hyps = [{
+            "id": "H1",
+            "type": "code_change",
+            "description": "Desc",
+            "rationale": "Rat",
+            "estimated_cost": "low",
+            "required_tools": ["docker", "promptfoo"],
+        }]
+        md = hypotheses_to_markdown(hyps)
+        assert "docker, promptfoo" in md
+        parsed = _parse_hypotheses(md)
+        # The selector parser doesn't extract required_tools, but the
+        # executor parser does — verify the markdown at least contains it
+        assert "Required Tools" in md

@@ -1499,6 +1499,10 @@ def _execute_human_selection(
     hypotheses = _parse_hypotheses(hypotheses_text)
 
     # ── Apply CLI hypothesis modifications (--add/--edit/--insert) ────
+    # Track original ID→description mapping so we can remap selection.json
+    # after renumbering ops (insert shifts IDs).
+    _old_id_to_desc = {h["id"]: h.get("description", "") for h in hypotheses}
+
     if config.hypothesis_ops:
         from ahvs.hypothesis_ops import apply_ops_and_rewrite
         hypotheses = apply_ops_and_rewrite(
@@ -1510,6 +1514,14 @@ def _execute_human_selection(
             f"now {len(hypotheses)} hypotheses"
         )
 
+    # Build old→new ID remap for any renumbering that occurred
+    _desc_to_new_id = {h.get("description", ""): h["id"] for h in hypotheses}
+    _id_remap = {}
+    for old_id, desc in _old_id_to_desc.items():
+        new_id = _desc_to_new_id.get(desc)
+        if new_id and new_id != old_id:
+            _id_remap[old_id] = new_id
+
     all_ids = [h["id"] for h in hypotheses]
 
     # ── Mode 1: Pre-specified selection.json ──────────────────────────
@@ -1517,10 +1529,12 @@ def _execute_human_selection(
     if pre_sel_path.exists():
         try:
             pre_sel = json.loads(pre_sel_path.read_text(encoding="utf-8"))
+            # Remap IDs if renumbering ops shifted them
+            raw_selected = [s.upper() for s in pre_sel.get("selected", [])]
             pre_selected = [
-                s.upper()
-                for s in pre_sel.get("selected", [])
-                if s.upper() in all_ids
+                _id_remap.get(s, s)
+                for s in raw_selected
+                if _id_remap.get(s, s) in all_ids
             ]
         except (json.JSONDecodeError, TypeError):
             pre_selected = []

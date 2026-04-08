@@ -26,6 +26,7 @@ def _parse_hypothesis_ops(args: argparse.Namespace) -> list[dict]:
         data.setdefault("type", "code_change")
         ops.append(data)
 
+    _reserved_edit_keys = {"id", "op", "_source", "_edited"}
     for raw in getattr(args, "edit_hypotheses", []) or []:
         m = re.match(r"^(H\d+)\s*:\s*(.+)$", raw, re.IGNORECASE | re.DOTALL)
         if not m:
@@ -36,6 +37,13 @@ def _parse_hypothesis_ops(args: argparse.Namespace) -> list[dict]:
             fields = json.loads(m.group(2))
         except json.JSONDecodeError as e:
             print(f"Error: --edit-hypothesis: invalid JSON after {hyp_id}: {e}", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(fields, dict):
+            print(f"Error: --edit-hypothesis: expected JSON object, got {type(fields).__name__}", file=sys.stderr)
+            sys.exit(1)
+        bad_keys = set(fields.keys()) & _reserved_edit_keys
+        if bad_keys:
+            print(f"Error: --edit-hypothesis: reserved keys cannot be edited: {bad_keys}", file=sys.stderr)
             sys.exit(1)
         ops.append({"op": "edit", "id": hyp_id, "fields": fields})
 

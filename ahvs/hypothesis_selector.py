@@ -52,18 +52,11 @@ def _parse_hypotheses(text: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Valid hypothesis types
+# Valid hypothesis types (canonical source: hypothesis_ops.VALID_TYPES)
 # ---------------------------------------------------------------------------
 
-HYPOTHESIS_TYPES = [
-    "code_change",
-    "prompt_rewrite",
-    "config_change",
-    "architecture_change",
-    "model_comparison",
-    "dspy_optimize",
-    "multi_llm_judge",
-]
+from ahvs.hypothesis_ops import VALID_TYPES as _VALID_TYPES_SET
+HYPOTHESIS_TYPES = sorted(_VALID_TYPES_SET)
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +379,7 @@ _HTML_TEMPLATE = """\
     // ── State ──
     var hypotheses = {hypotheses_json};
     var nextNum = hypotheses.length + 1;
+    var structuralEdit = false;  // track whether any add/edit/reorder/remove happened
 
     function render() {{
       var container = document.getElementById('cards');
@@ -497,12 +491,14 @@ _HTML_TEMPLATE = """\
       h.rationale = document.getElementById('edit-rationale-' + idx).value;
       h.estimated_cost = document.getElementById('edit-cost-' + idx).value;
       h._edited = true;
+      structuralEdit = true;
       render();
     }}
 
     // ── Reorder ──
     function moveUp(idx) {{
       if (idx <= 0) return;
+      structuralEdit = true;
       var tmp = hypotheses[idx - 1];
       hypotheses[idx - 1] = hypotheses[idx];
       hypotheses[idx] = tmp;
@@ -511,6 +507,7 @@ _HTML_TEMPLATE = """\
     }}
     function moveDown(idx) {{
       if (idx >= hypotheses.length - 1) return;
+      structuralEdit = true;
       var tmp = hypotheses[idx + 1];
       hypotheses[idx + 1] = hypotheses[idx];
       hypotheses[idx] = tmp;
@@ -527,6 +524,7 @@ _HTML_TEMPLATE = """\
     function addHypothesis() {{
       var desc = document.getElementById('new-desc').value.trim();
       if (!desc) {{ alert('Description is required.'); return; }}
+      structuralEdit = true;
       hypotheses.push({{
         id: 'H' + nextNum++,
         type: document.getElementById('new-type').value,
@@ -547,6 +545,7 @@ _HTML_TEMPLATE = """\
     // ── Remove ──
     function removeHyp(idx) {{
       if (!confirm('Remove ' + hypotheses[idx].id + '?')) return;
+      structuralEdit = true;
       hypotheses.splice(idx, 1);
       renumber();
       render();
@@ -560,7 +559,7 @@ _HTML_TEMPLATE = """\
         alert('Please select at least one hypothesis.');
         return;
       }}
-      // Clean internal flags before sending
+      // Clean internal flags before sending — preserve all fields
       var cleaned = hypotheses.map(function(h) {{
         var c = {{}};
         c.id = h.id;
@@ -568,6 +567,7 @@ _HTML_TEMPLATE = """\
         c.description = h.description || '';
         c.rationale = h.rationale || '';
         c.estimated_cost = h.estimated_cost || '';
+        c.required_tools = h.required_tools || [];
         if (h._source) c._source = h._source;
         if (h._edited) c._edited = true;
         return c;
@@ -575,7 +575,7 @@ _HTML_TEMPLATE = """\
       fetch('/submit', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
-        body: JSON.stringify({{selected: selected, hypotheses: cleaned}})
+        body: JSON.stringify({{selected: selected, hypotheses: cleaned, modified: structuralEdit}})
       }}).then(function(r) {{
         if (r.ok) {{
           document.getElementById('banner').style.display = 'block';
@@ -610,6 +610,15 @@ class _SelectionState:
         self.done = threading.Event()
 
 
+def _safe_json_for_script(obj: object) -> str:
+    """Serialize to JSON and escape characters that break <script> blocks.
+
+    Prevents XSS from hypothesis text containing </script> or similar.
+    """
+    raw = json.dumps(obj)
+    return raw.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
 def _build_html(hypotheses: list[dict], cycle_dir: Path, question: str) -> str:
     # Build type <option> tags for the add modal
     type_options = "\n".join(
@@ -618,14 +627,15 @@ def _build_html(hypotheses: list[dict], cycle_dir: Path, question: str) -> str:
         + f'>{t}</option>'
         for t in HYPOTHESIS_TYPES
     )
-    # Prepare JSON-safe hypothesis data
-    hyp_json = json.dumps([
+    # Prepare JSON-safe hypothesis data (preserve all fields for round-trip)
+    hyp_json = _safe_json_for_script([
         {
             "id": h["id"],
             "type": h.get("type", "code_change"),
             "description": h.get("description", ""),
             "rationale": h.get("rationale", ""),
             "estimated_cost": h.get("estimated_cost", ""),
+            "required_tools": h.get("required_tools", []),
             "_source": h.get("_source", "llm"),
             "_edited": h.get("_edited", False),
         }
@@ -637,7 +647,7 @@ def _build_html(hypotheses: list[dict], cycle_dir: Path, question: str) -> str:
         cards_html="      <!-- rendered client-side -->",
         type_options=type_options,
         hypotheses_json=hyp_json,
-        types_json=json.dumps(HYPOTHESIS_TYPES),
+        types_json=_safe_json_for_script(HYPOTHESIS_TYPES),
     )
 
 
@@ -664,8 +674,8 @@ def _make_handler(html_content: str, state: _SelectionState):
             try:
                 data = json.loads(raw)
                 state.selected = [str(s).upper() for s in data.get("selected", [])]
-                # Capture modified hypothesis list from GUI
-                if "hypotheses" in data and isinstance(data["hypotheses"], list):
+                # Only capture modified hypothesis list when GUI had structural edits
+                if data.get("modified") and isinstance(data.get("hypotheses"), list):
                     state.hypotheses = data["hypotheses"]
             except (json.JSONDecodeError, TypeError):
                 state.selected = []
