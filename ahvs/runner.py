@@ -101,6 +101,7 @@ def execute_ahvs_cycle(
 
             removed = EvolutionStore.cleanup_cycles(cycles_root, keep_complete=3, exclude=cycle_dir)
             if removed:
+                # Should not happen — cleanup_cycles no longer deletes
                 print(f"[AHVS] Cleaned up {len(removed)} stale cycle dir(s)")
 
             if config.evolution_dir.exists():

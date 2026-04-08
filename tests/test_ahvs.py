@@ -3463,8 +3463,9 @@ class TestCleanupCycles:
         bad = self._make_cycle(cycles, "20260325_222024", 1, "failed")
 
         removed = EvolutionStore.cleanup_cycles(cycles)
-        assert "20260325_222024" in removed
-        assert not bad.exists()
+        # cleanup_cycles no longer deletes — only logs candidates
+        assert removed == []
+        assert bad.exists()  # data preserved for manual cleanup
 
     def test_removes_orphan_dirs(self, tmp_path: Path) -> None:
         from ahvs.evolution import EvolutionStore
@@ -3476,8 +3477,8 @@ class TestCleanupCycles:
         # No checkpoint file
 
         removed = EvolutionStore.cleanup_cycles(cycles)
-        assert "test_wt" in removed
-        assert not orphan.exists()
+        assert removed == []
+        assert orphan.exists()  # data preserved for manual cleanup
 
     def test_removes_partial_cycles(self, tmp_path: Path) -> None:
         from ahvs.evolution import EvolutionStore
@@ -3487,8 +3488,8 @@ class TestCleanupCycles:
         partial = self._make_cycle(cycles, "20260325_222114", 6, "done")
 
         removed = EvolutionStore.cleanup_cycles(cycles)
-        assert "20260325_222114" in removed
-        assert not partial.exists()
+        assert removed == []
+        assert partial.exists()  # data preserved for manual cleanup
 
     def test_keeps_recent_complete_cycles(self, tmp_path: Path) -> None:
         from ahvs.evolution import EvolutionStore
@@ -3514,10 +3515,9 @@ class TestCleanupCycles:
         new2 = self._make_cycle(cycles, "20260304_000000", 8, "done")
 
         removed = EvolutionStore.cleanup_cycles(cycles, keep_complete=2)
-        assert "20260301_000000" in removed
-        assert "20260302_000000" in removed
-        assert not old.exists()
-        assert not mid.exists()
+        # No longer deletes — only logs candidates
+        assert removed == []
+        assert old.exists() and mid.exists()
         assert new1.exists() and new2.exists()
 
     def test_keep_complete_zero_preserves_all(self, tmp_path: Path) -> None:
@@ -3546,10 +3546,12 @@ class TestCleanupCycles:
         orphan.mkdir()
 
         removed = EvolutionStore.cleanup_cycles(cycles, keep_complete=3)
-        # Should remove: 2 failed + 2 partial + 1 orphan = 5
-        assert len(removed) == 5
-        # Only the complete cycle survives
+        # No longer deletes — only logs candidates for manual cleanup
+        assert removed == []
+        # All directories preserved
         assert (cycles / "20260325_232853").exists()
+        assert (cycles / "20260325_222024").exists()
+        assert orphan.exists()
 
     def test_handles_nonexistent_dir(self, tmp_path: Path) -> None:
         from ahvs.evolution import EvolutionStore

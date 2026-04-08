@@ -794,32 +794,18 @@ class EvolutionStore:
             else:
                 partial.append(cycle_dir)
 
-        # 1–3: Remove all failed, orphan, and partial dirs
-        for d in failed + orphan + partial:
-            try:
-                shutil.rmtree(d)
-                removed.append(d.name)
-            except OSError:
-                continue
-
-        # 4: Trim old complete cycles beyond the retention window.
-        #    complete list is already sorted by name (timestamp-based),
-        #    so the last `keep_complete` entries are the most recent.
+        # Collect candidates but do NOT delete — only the user may remove
+        # cycle data.  Previous auto-deletion caused irreversible data loss.
+        candidates = [d.name for d in failed + orphan + partial]
         if keep_complete > 0 and len(complete) > keep_complete:
-            to_remove = complete[:-keep_complete]
-            for d in to_remove:
-                try:
-                    shutil.rmtree(d)
-                    removed.append(d.name)
-                except OSError:
-                    continue
+            candidates.extend(d.name for d in complete[:-keep_complete])
 
-        if removed:
+        if candidates:
             logger.info(
-                "Cleaned up %d cycle dir(s): %s",
-                len(removed), ", ".join(removed),
+                "Found %d stale cycle dir(s) that can be removed manually: %s",
+                len(candidates), ", ".join(candidates),
             )
-        return removed
+        return removed  # always empty — no auto-deletion
 
     @staticmethod
     def compact_friction_logs(
