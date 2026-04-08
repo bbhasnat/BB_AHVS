@@ -209,6 +209,46 @@ Identify all tunable parameters in the codebase and encode them so AHVS generate
 
 This ensures AHVS hypotheses propose real algorithmic changes (post selection, threshold tuning, scoring logic) not just prompt rewrites.
 
+### Phase 5b: Enable LLM Response Caching
+
+**This is mandatory for all onboarded repos.** AHVS repos that make LLM API calls (OpenRouter, OpenAI, Anthropic) must have response caching enabled to avoid redundant API calls on re-runs, interrupted runs, and hypothesis re-execution.
+
+**How it works:**
+- The AHVS package provides `ahvs.llm.cache.LLMCache` — a SQLite-backed, content-addressable response cache
+- Cache key = SHA-256 of (model, messages, temperature) — any parameter change produces a new key
+- Controlled via `LLM_CACHE_ENABLED` env var (default: `true`)
+- Cache lives in `<repo>/.ahvs/.llm_cache/responses.db`
+
+**What to do during onboarding:**
+
+1. **Check if the repo's LLM client uses caching.** Search for `LLMCache`, `cache`, or `_make_cache_key` in the repo's LLM client code.
+
+2. **If no caching exists**, integrate it into the repo's LLM client. The pattern is:
+   ```python
+   # In the repo's llm_client.py or equivalent
+   from ahvs.llm.cache import LLMCache
+
+   cache = LLMCache(Path(".ahvs/.llm_cache"))
+
+   def call_llm(prompt):
+       key = make_cache_key(model, prompt, temperature)
+       cached = cache.get(key)
+       if cached:
+           return cached  # Skip API call
+       response = actual_api_call(prompt)
+       cache.put(key, content=response.text, model=model, ...)
+       return response
+   ```
+
+3. **Add `.ahvs/.llm_cache/` to `.gitignore`** — cache files are machine-local and should not be committed.
+
+4. **Document in baseline_metric.json** under `notes`:
+   ```json
+   "llm_caching": "Enabled via ahvs.llm.cache.LLMCache in <file>. Control with LLM_CACHE_ENABLED env var."
+   ```
+
+**Why this matters:** Without caching, every AHVS hypothesis that requires re-inference pays full API cost even for identical prompts. A single interrupted run can waste hundreds of dollars on repeated calls. The checkpoint system prevents re-processing records, but caching prevents re-calling the API for the same prompt content.
+
 ### Phase 6: Write Artifacts and Register in AHVS
 
 Create `.ahvs/` directory, then write the artifacts below.
