@@ -438,6 +438,14 @@ def _generate_files_with_claude_code(
         and "__pycache__" not in p.parts
         and ".git" not in p.parts
     )
+    # Include the eval entry point even if it lives under .ahvs/ —
+    # without this, Claude Code can't see the eval script in the
+    # file listing and may search outside the worktree to find it.
+    eval_entry = _find_eval_entry_script(eval_command)
+    if eval_entry and eval_entry not in src_files:
+        eval_path = target_dir / eval_entry
+        if eval_path.is_file():
+            src_files.append(eval_entry)
     file_listing = "\n".join(f"- {f}" for f in src_files[:30])
 
     prompt = (
@@ -447,7 +455,9 @@ def _generate_files_with_claude_code(
         f"**Type:** {hyp_type}\n"
         f"**Description:** {description}\n\n"
         f"## Target Repository\n"
-        f"Path: {target_dir}\n\n"
+        f"Path: {target_dir}\n"
+        f"**IMPORTANT: All file reads and edits MUST use paths within this "
+        f"directory. Do NOT access files outside it.**\n\n"
         f"## Existing source files:\n{file_listing}\n\n"
         f"## Eval command (how the metric is measured):\n"
         f"```\n{eval_command}\n```\n\n"
