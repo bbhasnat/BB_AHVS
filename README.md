@@ -14,6 +14,7 @@ AHVS is a standalone cyclic hypothesis-validation pipeline that autonomously gen
     - [4.2 Genesis](#42-genesis--bootstrap-a-project-from-data)
     - [4.3 Onboarding](#43-onboarding--prepare-a-repo-for-ahvs-cycles)
     - [4.4 The 8-Stage Optimization Cycle](#44-the-8-stage-optimization-cycle)
+    - [4.5 Data Analyst](#45-data-analyst--goal-directed-ml-data-analysis)
 5. [Four Ways to Use AHVS](#5-four-ways-to-use-ahvs)
 6. [Quick Start](#6-quick-start)
 7. [CLI Reference](#7-cli-reference)
@@ -55,19 +56,22 @@ Each cycle is self-contained and idempotent. The accumulated lessons steer futur
 
 ## 2. Pipeline Stages
 
-AHVS has four user-facing stages that take you from a raw idea to optimized results. Each stage has a dedicated skill in Claude Code and a detailed guide in `docs/`.
+AHVS has four user-facing stages that take you from a raw idea to optimized results, plus a cross-cutting data analysis tool. Each has a dedicated skill in Claude Code and a detailed guide in `docs/`.
 
 ```
 /ahvs_brainstorm  →  /ahvs_genesis  →  /ahvs_onboarding  →  /ahvs_multiagent
    "what & why"       "scaffold it"      "wire up eval"       "optimize it"
+                                                                    ↕
+                                          ahvs data_analyst  ←  "analyse data"
 ```
 
-| Stage | Skill | What it does | Output | Detailed guide |
-|-------|-------|-------------|--------|----------------|
+| Stage | Skill / Command | What it does | Output | Detailed guide |
+|-------|----------------|-------------|--------|----------------|
 | **1. Brainstorm** | `/ahvs_brainstorm` | Explores your problem space, proposes 2-3 approaches with trade-offs, writes a design doc. Asks what you have (data, repo, or idea) before proposing anything. | Design doc in `docs/ahvs/designs/` with pre-filled genesis inputs | [docs/ahvs_brainstorm.md](docs/ahvs_brainstorm.md) |
 | **2. Genesis** | `/ahvs_genesis` | Takes a problem + data and scaffolds a complete project: labels data, trains a model, measures baseline, registers in AHVS. | AHVS-ready project with `.ahvs/baseline_metric.json` | [docs/ahvs_genesis.md](docs/ahvs_genesis.md) |
 | **3. Onboarding** | `/ahvs_onboarding` | Wires up an existing repo for AHVS: creates headless eval command, writes baseline metric file, verifies everything works. | Verified `.ahvs/baseline_metric.json` + eval script | [docs/ahvs_onboarding.md](docs/ahvs_onboarding.md) |
 | **4. Multi-Agent Cycles** | `/ahvs_multiagent` | Runs the full 8-stage AHVS optimization cycle with executor + observer agents. Generates hypotheses, tests them in isolated worktrees, archives lessons. | Cycle report with keep/revert recommendations | [docs/ahvs_multiagent.md](docs/ahvs_multiagent.md) |
+| **Data Analyst** | `ahvs data_analyst` | Goal-directed ML data analysis: profiles datasets, detects columns/labels, computes class balance and text stats, deduplicates, subsamples, splits, and exports. | Markdown + JSON report with visualizations | [docs/ahvs_data_analyst.md](docs/ahvs_data_analyst.md) |
 
 **Not every stage is required.** Common paths:
 
@@ -75,10 +79,12 @@ AHVS has four user-facing stages that take you from a raw idea to optimized resu
 |---------------|------|
 | Vague idea, no data | brainstorm → genesis → multiagent |
 | Data file, know what to build | genesis → multiagent |
+| Have data, need analysis first | data_analyst → genesis → multiagent |
 | Existing repo, needs AHVS setup | onboarding → multiagent |
 | Existing repo, already has `.ahvs/` | multiagent (directly) |
 
 Cross-cutting concerns are documented separately:
+- **Data analysis:** [docs/ahvs_data_analyst.md](docs/ahvs_data_analyst.md)
 - **Memory management:** [docs/memory_management_system.md](docs/memory_management_system.md)
 - **Security:** [docs/security_analysis.md](docs/security_analysis.md)
 
@@ -247,6 +253,35 @@ If the operator aborts, the cycle can be resumed from Stage 3 to regenerate hypo
 Every stage writes a checkpoint. A failed stage stops the cycle; later stages are not run. You can also stop early with `--until-stage STAGE_NAME` to run only up to a specific stage (e.g. `--until-stage AHVS_HYPOTHESIS_GEN` for generation only), then resume later with `--from-stage`.
 
 > **Clean repo required:** Stage 1 pre-flight **fails** if the target repo has uncommitted changes. This is a hard requirement because AHVS creates hypothesis worktrees from committed `HEAD` — uncommitted changes in the working tree would not be included in the experiment. Commit or stash changes before starting a cycle.
+
+### 4.5 Data Analyst — Goal-Directed ML Data Analysis
+
+The data analyst is a **cross-cutting tool** that can be used at any point in the AHVS lifecycle. It analyses datasets for ML readiness using a 4-phase pipeline:
+
+```
+Data Path + Goal  →  Profile  →  Plan  →  Execute Modules  →  Report
+                     (0 LLM)    (1 LLM)    (local)           (1 LLM)
+```
+
+**7 built-in modules:** `eda` (descriptive stats + plots), `class_balance` (imbalance ratio, entropy), `text_stats` (token distributions, vocabulary), `duplicates` (exact + MinHash LSH fuzzy), `subsample` (stratified, balanced, diversity), `split` (train/val/test), `export` (CSV, Parquet, JSON, JSONL).
+
+**Key features:**
+- Auto-detects column roles (text input, numeric input, label, ID, timestamp, metadata)
+- Auto-detects label columns via pattern matching
+- Modules compose — `subsample → export` exports the subsampled data
+- Privacy-first — raw data never sent to LLM, only schema summaries
+- Produces markdown + JSON reports with visualizations
+
+```bash
+# CLI
+ahvs data_analyst --data absa.parquet --goal "ABSA classifier" --label sentiment
+
+# Python
+from ahvs.data_analyst import analyze
+report = analyze(data_path="data.csv", goal="sentiment classifier")
+```
+
+Full reference: **[docs/ahvs_data_analyst.md](docs/ahvs_data_analyst.md)**
 
 ---
 
@@ -548,6 +583,26 @@ cat /tmp/my_classifier/.ahvs/baseline_metric.json
 # Step 3: Run AHVS optimization (when ready)
 ahvs --repo my_classifier --question "improve f1_weighted to 0.85" --domain ml
 ```
+
+### Data Analyst — analyse a dataset for ML readiness
+
+```bash
+ahvs data_analyst --data absa.parquet --goal "build ABSA classifier" --label sentiment
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--data`, `-d` | *(required)* | Path to data file (CSV, Parquet, JSON, JSONL) |
+| `--goal`, `-g` | `""` | Natural-language goal (e.g., "build sentiment classifier") |
+| `--task`, `-t` | `classification` | Shorthand task type |
+| `--modules`, `-m` | *(auto-select)* | Comma-separated module list (e.g., `eda,class_balance`) |
+| `--output`, `-o` | `analysis_<timestamp>/` | Output directory |
+| `--label` | *(auto-detect)* | Force a specific column as the label |
+| `--inputs` | *(auto-detect)* | Comma-separated input columns |
+| `--nrows` | *(all)* | Limit rows for quick profiling |
+| `--verbose`, `-v` | off | Verbose logging |
+
+Full reference: [docs/ahvs_data_analyst.md](docs/ahvs_data_analyst.md).
 
 ### Cycle — run an AHVS optimization cycle
 
@@ -932,6 +987,27 @@ When `eval_command` is configured, it is the **only trusted measurement source**
 - For GPU-heavy evals, confirm the machine had enough free VRAM before the run. AHVS cleans up timed-out/crashed eval workers, but external processes can still block a hypothesis from starting or finishing.
 - Ensure the hypothesis code writes the metric in a parseable format (JSON or `key: value`)
 
+### Data Analyst API
+
+```python
+from ahvs.data_analyst import analyze, profile_data
+
+# One-call analysis
+report = analyze(
+    data_path="data.parquet",
+    goal="build sentiment classifier",
+    label_hint="sentiment",
+    output_dir="analysis/",
+)
+print(f"Completeness: {report.completeness_score():.0f}%")
+
+# Profile only (no execution)
+profile = profile_data("data.csv")
+print(profile.summary_for_llm())
+```
+
+Full API reference: [docs/ahvs_data_analyst.md](docs/ahvs_data_analyst.md).
+
 ---
 
 ## 12. Configuration Reference
@@ -1022,9 +1098,28 @@ ahvs/
 │   └── solvers/
 │       ├── kd_classifier.py # KD adapter (pipeline + agent modes)
 │       └── solvers.yaml     # Solver registry config
+├── data_analyst/            # Goal-directed ML data analysis (ahvs data_analyst)
+│   ├── __init__.py          # Public API: analyze(), profile_data()
+│   ├── profiler.py          # Phase 1: data loading, schema inference, column detection
+│   ├── planner.py           # Phase 2: LLM-assisted goal alignment + module selection
+│   ├── executor.py          # Phase 3: sequential module execution engine
+│   ├── synthesizer.py       # Phase 4: markdown + JSON report generation
+│   ├── models.py            # Core dataclasses (DataProfile, ModuleResult, etc.)
+│   ├── validators.py        # Validation framework (sample size, balance, quality)
+│   ├── registry.py          # Module discovery and registration
+│   └── modules/             # Built-in analysis modules
+│       ├── eda.py           # Descriptive statistics + visualizations
+│       ├── class_balance.py # Label frequency, imbalance, entropy
+│       ├── text_stats.py    # Token distributions, vocabulary, per-class stats
+│       ├── duplicates.py    # Exact + MinHash LSH fuzzy deduplication
+│       ├── subsample.py     # Stratified, balanced, diversity sampling
+│       ├── split.py         # Train/val/test stratified split
+│       └── export.py        # Multi-format dataset export
 ├── domain_packs/            # Domain-specific prompt + skill overrides
 │   ├── ml_prompts.yaml      # Traditional ML hypothesis prompts (--domain ml)
-│   └── ml_skills.yaml       # ML skill templates (sklearn, optuna, etc.)
+│   ├── ml_skills.yaml       # ML skill templates (sklearn, optuna, etc.)
+│   ├── data_analyst_prompts.yaml  # Data analyst hypothesis prompts
+│   └── data_analyst_skills.yaml   # Data analyst skill definitions
 ├── llm/                     # LLM client factory + response cache
 │   ├── __init__.py
 │   ├── client.py            # Provider-agnostic LLM client
@@ -1344,7 +1439,7 @@ AHVS has a strong generic execution contract: repo + baseline metric + `eval_com
 ### Platform integration
 
 1. **Databricks integration** — Run AHVS natively on Databricks via Asset Bundles or workflow jobs.
-2. **Knowledge distillation as hypothesis type** — KD is already integrated at the Genesis layer (`ahvs genesis` scaffolds KD projects via the `kd_classifier` solver). Remaining: `knowledge_distillation` as a first-class AHVS hypothesis type, `--domain kd` domain pack, and cross-system memory fields. See [docs/AHVS_KD_integration.md](docs/AHVS_KD_integration.md).
+2. **Knowledge distillation as hypothesis type** — KD is already integrated at the Genesis layer (`ahvs genesis` scaffolds KD projects via the `kd_classifier` solver). Remaining: `knowledge_distillation` as a first-class AHVS hypothesis type, `--domain kd` domain pack, and cross-system memory fields.
 3. **MLOps export** — Push cycle results to W&B, MLflow, or Comet.
 4. **GitHub CI integration** — PR-triggered AHVS cycles, eval-quality gates.
 5. **MCP server for AHVS** — Expose AHVS as a Model Context Protocol service.
