@@ -1087,31 +1087,59 @@ def _parse_validation_plan(text: str) -> list[dict]:
 
 def _extract_metric_from_output(raw_output: str, metric_key: str) -> float | None:
     """Try to extract a float metric value from JSON or key:value text output."""
-    # Try JSON parse
-    for line in reversed(raw_output.strip().splitlines()):
+
+    def _navigate(data: Any, key: str) -> float | None:
+        """Navigate a dot-separated key path in a parsed JSON object."""
+        parts = key.split(".")
+        val = data
+        for p in parts:
+            if isinstance(val, dict):
+                val = val.get(p)
+            elif isinstance(val, list) and p.isdigit():
+                idx = int(p)
+                val = val[idx] if idx < len(val) else None
+            else:
+                val = None
+            if val is None:
+                break
+        if isinstance(val, (int, float)):
+            return float(val)
+        return None
+
+    def _try_json(data: dict) -> float | None:
+        """Try metric_key, then AHVS-standard 'metric_value' fallback."""
+        val = _navigate(data, metric_key)
+        if val is not None:
+            return val
+        # AHVS eval scripts emit {"metric_value": <float>} — use as fallback
+        return _navigate(data, "metric_value")
+
+    # 1. Try parsing the entire output as a single JSON object (handles
+    #    multi-line / indented JSON from eval scripts).
+    stripped = raw_output.strip()
+    try:
+        data = json.loads(stripped)
+        if isinstance(data, dict):
+            result = _try_json(data)
+            if result is not None:
+                return result
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # 2. Line-by-line reverse scan for embedded single-line JSON objects
+    #    (handles mixed output where JSON is printed among other text).
+    for line in reversed(stripped.splitlines()):
         line = line.strip()
         if line.startswith("{"):
             try:
                 data = json.loads(line)
-                # Navigate dot-separated key path
-                parts = metric_key.split(".")
-                val: Any = data
-                for p in parts:
-                    if isinstance(val, dict):
-                        val = val.get(p)
-                    elif isinstance(val, list) and p.isdigit():
-                        idx = int(p)
-                        val = val[idx] if idx < len(val) else None
-                    else:
-                        val = None
-                    if val is None:
-                        break
-                if isinstance(val, (int, float)):
-                    return float(val)
+                result = _try_json(data)
+                if result is not None:
+                    return result
             except (json.JSONDecodeError, IndexError, TypeError):
                 pass
 
-    # Try "metric_key: 0.82" pattern
+    # 3. Try "metric_key: 0.82" pattern
     pattern = re.compile(
         rf"{re.escape(metric_key)}\s*[:\s]\s*([+-]?\d+\.?\d*(?:[eE][+-]?\d+)?)",
         re.IGNORECASE,
