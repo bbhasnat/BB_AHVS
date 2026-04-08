@@ -24,16 +24,16 @@ AHVS is a standalone cyclic hypothesis-validation pipeline that autonomously gen
 12. [Configuration Reference](#12-configuration-reference)
 13. [Directory Layout](#13-directory-layout)
 14. [Advanced Usage](#14-advanced-usage)
-    - [Model Selection Strategy](#model-selection-strategy)
-    - [Budget Planning for Experiments](#budget-planning-for-experiments)
-    - [LLM Response Cache](#llm-response-cache)
-    - [Prompt Engineering Tips](#prompt-engineering-tips)
-    - [Multi-Agent Execution](#multi-agent-execution-with-claude-code-agent-teams)
-    - [Features Added](#features-added)
-    - [Roadmap](#roadmap)
-    - [Browser-Based Hypothesis Selector](#browser-based-hypothesis-selector)
-    - [AST-Based Partial Output Merging](#ast-based-partial-output-merging-splice_functions)
-    - [Test Coverage](#test-coverage)
+    - [Model selection strategy](#model-selection-strategy)
+    - [Budget planning for experiments](#budget-planning-for-experiments)
+    - [LLM response cache](#llm-response-cache)
+    - [Prompt engineering tips](#prompt-engineering-tips)
+    - [Multi-agent execution](#multi-agent-execution-with-claude-code-agent-teams)
+    - [Browser-based hypothesis selector](#browser-based-hypothesis-selector)
+    - [AST-based partial output merging](#ast-based-partial-output-merging-splice_functions)
+15. [Features Added](#15-features-added)
+16. [Roadmap](#16-roadmap)
+17. [Development](#17-development)
 
 ---
 
@@ -911,7 +911,7 @@ for r in results:
     print(f"{r.hypothesis_id}: delta={r.delta:+.4f} improved={r.improved}")
 ```
 
-### Result Fields: `measurement_status`
+### Result fields: `measurement_status`
 
 Each `HypothesisResult` includes a `measurement_status` field that tracks whether the metric was successfully captured. This prevents silent fallback to the baseline value when measurement fails.
 
@@ -1103,21 +1103,7 @@ The registry is updated during onboarding and after each cycle. It is user-local
 
 ### Memory model
 
-AHVS uses a three-tier persistence model. All tiers write to the **target repo**, not to the AHVS package directory or Claude's machine-local storage. This ensures memory is portable across machines and stays with the project it describes.
-
-| Tier | Location | Purpose | Written by |
-|---|---|---|---|
-| **Session memory** | `<repo>/.ahvs/memory/` | Human-readable session summaries, bug reports, and cross-session lessons | Team lead / observer agent |
-| **Friction log** | `<repo>/.ahvs/cycles/<id>/friction_log.md` | Per-cycle operator notes, errors, measurement issues | Executor (auto) + observer |
-| **Evolution lessons** | `<repo>/.ahvs/evolution/lessons.jsonl` | Machine-readable JSON lines fed into the next cycle's context loader (Stage 2) | Observer agent |
-
-**Session memory** (`<repo>/.ahvs/memory/`) contains:
-- Session records: what hypotheses ran, what improved, what bugs were found
-- Bug reports: root cause, fix details, files changed
-- Lessons that span multiple cycles (e.g., "prompt_rewrite hypotheses are unmeasurable with --eval-only")
-- An `INDEX.md` file indexing all memory files with one-line descriptions
-
-When AHVS agents start a cycle, they read `<repo>/.ahvs/memory/` to recall prior session context. When they find a bug or lesson, they write to it immediately — not at end of session.
+See [Section 10: Cross-Cycle Memory](#10-cross-cycle-memory) for the full three-tier memory architecture and how lessons are recorded, managed, and queried across cycles.
 
 ---
 
@@ -1282,7 +1268,7 @@ AHVS caches LLM responses in a per-project SQLite database at `<repo>/.ahvs/.llm
 - The `--auto-approve` flag is safe for unattended runs but be sure your regression guard is set up — it prevents a bad hypothesis from being silently "improved".
 - Reference concrete code paths in your question when possible: *"The chunking in `src/pipeline/splitter.py` uses fixed 512-token windows — can we improve answer\_relevance by switching to semantic chunking?"* gives Claude Code much better starting context.
 
-### Multi-agent execution with Claude Code Agent Teams
+### Multi-agent execution with Claude Code agent teams
 
 AHVS can be orchestrated by a **team of agents** (team lead, executor, observer) that coordinate hypothesis generation, execution, and verification. This enables supervised execution with automatic bug-fixing between hypotheses.
 
@@ -1314,7 +1300,9 @@ You can detach (`Ctrl-b d`) and re-attach later (`tmux attach -t ahvs`) — the 
 | `Ctrl-b [` | Scroll mode (navigate output history) |
 | `q` | Exit scroll mode |
 
-### Features Added
+---
+
+## 15. Features Added
 
 | Feature | Description |
 |---------|-------------|
@@ -1329,37 +1317,39 @@ You can detach (`Ctrl-b d`) and re-attach later (`tmux attach -t ahvs`) — the 
 | **Multi-agent execution** | `/ahvs_multiagent` skill — team lead + executor + observer pattern with failure classification and automatic bug-fixing. See [docs/ahvs_multiagent.md](docs/ahvs_multiagent.md). |
 | **AST-based partial output merging** | `splice_functions` in `worktree.py` — merges partial Claude Code outputs using AST rather than naive overwrite. See [below](#ast-based-partial-output-merging-splice_functions). |
 
-### Roadmap
+---
+
+## 16. Roadmap
 
 AHVS has a strong generic execution contract: repo + baseline metric + `eval_command` + isolated worktrees. That foundation is stable. Remaining work:
 
-#### UX
+### UX
 
 1. **Browser GUI for lesson/memory cleanup** — Interactive GUI (similar to hypothesis selector) for inspecting, filtering, and deleting individual lessons from `lessons.jsonl` and memory files from `.ahvs/memory/`.
 
-#### Execution & runtime
+### Execution & runtime
 
 1. **Parallel hypothesis execution** — Add `fcntl.flock` around worktree operations + `concurrent.futures` over the hypothesis list.
 2. **Improve unattended throughput** — Batch execution benefits once parallelism is in place.
 3. **Jupyter notebook-style execution** — Fix only the failing cell and resume, preserving expensive intermediate state.
 4. **Multi-agent decomposition** — Narrower agents (plan-validator, code-reviewer, test-runner) instead of monolithic executor.
 
-#### Domain expansion
+### Domain expansion
 
 1. **Multi-metric optimization** — Pareto-optimal selection across multiple metrics (precision *and* recall, accuracy *and* latency).
 2. **Complex algorithmic tasks** — Knowledge graph improvement, narrative quality, graph-structure hypothesis validation.
 3. **Data analytics domain** — Dataset selection, feature subset optimization, preprocessing pipeline tuning.
 4. **End-to-end examples** — Worked examples for text classification, regression, data preprocessing.
 
-#### Platform integration
+### Platform integration
 
 1. **Databricks integration** — Run AHVS natively on Databricks via Asset Bundles or workflow jobs.
-2. **Knowledge distillation integration** — KD as a first-class AHVS hypothesis type. See [docs/AHVS_KD_integration.md](docs/AHVS_KD_integration.md).
+2. **Knowledge distillation as hypothesis type** — KD is already integrated at the Genesis layer (`ahvs genesis` scaffolds KD projects via the `kd_classifier` solver). Remaining: `knowledge_distillation` as a first-class AHVS hypothesis type, `--domain kd` domain pack, and cross-system memory fields. See [docs/AHVS_KD_integration.md](docs/AHVS_KD_integration.md).
 3. **MLOps export** — Push cycle results to W&B, MLflow, or Comet.
 4. **GitHub CI integration** — PR-triggered AHVS cycles, eval-quality gates.
 5. **MCP server for AHVS** — Expose AHVS as a Model Context Protocol service.
 
-#### Intelligence & evolution
+### Intelligence & evolution
 
 1. **DSPy/GEPA prompt evolution** — Iteratively evolve prompts/configs over N generations with trace-informed mutations.
 2. **LLM-as-judge secondary evaluator** — Fast LLM-judge heuristic for intermediate hypothesis filtering.
@@ -1368,7 +1358,7 @@ AHVS has a strong generic execution contract: repo + baseline metric + `eval_com
 5. **Recursive self-improvement** — AHVS applies hypothesis-driven improvement to its own strategies.
 6. **Constraint gating for text artifacts** — Size limits and growth bounds for evolved prompts/configs.
 
-#### Memory
+### Memory
 
 1. **LLM-based lesson summarization** — Consolidate related lessons into summaries to reduce prompt token usage.
 
@@ -1407,6 +1397,10 @@ When Claude Code produces a partial file (containing only some functions from an
 - **Propagates** new imports from the partial file
 
 If either the original or partial file has syntax errors, the merge falls back gracefully — returning the partial output (if the original can't be parsed) or the original (if the partial can't be parsed).
+
+---
+
+## 17. Development
 
 ### Test coverage
 
