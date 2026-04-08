@@ -205,9 +205,27 @@ def splice_functions(original_src: str, partial_src: str) -> str:
         for i, imp_line in enumerate(new_import_lines):
             result_lines.insert(last_import_line + i, imp_line)
 
-    # Append new definitions at the end
+    # Append new definitions — but BEFORE any `if __name__ == "__main__":`
+    # block.  When new functions are placed after __main__, Python calls
+    # main() before the new definitions are executed → NameError.
     if appends:
-        result_lines.extend(appends)
+        main_guard_line: int | None = None
+        for node in orig_tree.body:
+            if (
+                isinstance(node, ast.If)
+                and isinstance(node.test, ast.Compare)
+                and isinstance(node.test.left, ast.Name)
+                and node.test.left.id == "__name__"
+            ):
+                main_guard_line = node.lineno - 1  # 0-indexed
+                break
+        if main_guard_line is not None:
+            # Insert before the __main__ guard (with a blank line separator)
+            insert_block = ["\n"] + appends + ["\n"]
+            for i, line in enumerate(insert_block):
+                result_lines.insert(main_guard_line + i, line)
+        else:
+            result_lines.extend(appends)
 
     merged = "".join(result_lines)
 

@@ -487,6 +487,21 @@ def _generate_files_with_claude_code(
     )
     print(f"[AHVS] {hyp_id}: using Claude Code for targeted file edit")
 
+    # Ensure the worktree is clean before Claude Code runs — stale edits
+    # from a previous run's apply_files() would confuse Claude Code and
+    # contaminate the git-status file capture.
+    try:
+        subprocess.run(
+            ["git", "checkout", "--", "."],
+            cwd=str(target_dir), capture_output=True, timeout=30,
+        )
+        subprocess.run(
+            ["git", "clean", "-fd"],
+            cwd=str(target_dir), capture_output=True, timeout=30,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     try:
         result = subprocess.run(
             [
