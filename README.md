@@ -1411,6 +1411,7 @@ You can detach (`Ctrl-b d`) and re-attach later (`tmux attach -t ahvs`) — the 
 | **Browser GUI forms** | `/ahvs_genesis:gui`, `/ahvs_onboarding:gui`, `/ahvs_multiagent:gui` — dark-themed browser forms for input collection. |
 | **Multi-agent execution** | `/ahvs_multiagent` skill — team lead + executor + observer pattern with failure classification and automatic bug-fixing. See [docs/ahvs_multiagent.md](docs/ahvs_multiagent.md). |
 | **AST-based partial output merging** | `splice_functions` in `worktree.py` — merges partial Claude Code outputs using AST rather than naive overwrite. See [below](#ast-based-partial-output-merging-splice_functions). |
+| **Data Analyst agent** | `ahvs data_analyst` — 4-phase ML data analysis pipeline (profile → plan → execute → report) with 7 modules: EDA, class balance, text stats, duplicate detection, subsampling, split, export. Auto-detects columns/labels, composable module outputs, privacy-first (raw data stays local). CLI + Python API + domain pack. See [docs/ahvs_data_analyst.md](docs/ahvs_data_analyst.md). |
 
 ---
 
@@ -1433,8 +1434,9 @@ AHVS has a strong generic execution contract: repo + baseline metric + `eval_com
 
 1. **Multi-metric optimization** — Pareto-optimal selection across multiple metrics (precision *and* recall, accuracy *and* latency).
 2. **Complex algorithmic tasks** — Knowledge graph improvement, narrative quality, graph-structure hypothesis validation.
-3. **Data analytics domain** — Dataset selection, feature subset optimization, preprocessing pipeline tuning.
-4. **End-to-end examples** — Worked examples for text classification, regression, data preprocessing.
+3. **Data analyst v2** — Synthetic text augmentation, correlation analysis, outlier detection, uncertainty sampling. (v1 shipped — see [Features Added](#15-features-added).)
+4. **Data analyst v3+** — CV support, regression tasks, NER, multi-file datasets, active learning loops.
+5. **End-to-end examples** — Worked examples for text classification, regression, data preprocessing.
 
 ### Platform integration
 
