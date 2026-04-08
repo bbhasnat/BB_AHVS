@@ -7,19 +7,20 @@ AHVS is a standalone cyclic hypothesis-validation pipeline that autonomously gen
 ## Table of Contents
 
 1. [Overview](#1-overview)
-2. [Architecture](#2-architecture)
-3. [The 8-Stage Cycle](#3-the-8-stage-cycle)
-4. [Four Ways to Use AHVS](#4-four-ways-to-use-ahvs)
-5. [Quick Start](#5-quick-start)
-6. [Onboarding a Target Repository](#6-onboarding-a-target-repository)
-7. [CLI Reference](#7-cli-reference)
-8. [Hypothesis Types](#8-hypothesis-types)
-9. [Skill Library](#9-skill-library)
-10. [Cross-Cycle Memory](#10-cross-cycle-memory)
-11. [Python API](#11-python-api)
-12. [Configuration Reference](#12-configuration-reference)
-13. [Directory Layout](#13-directory-layout)
-14. [Advanced Usage](#14-advanced-usage)
+2. [Pipeline Stages](#2-pipeline-stages)
+3. [Architecture](#3-architecture)
+4. [The 8-Stage Cycle](#4-the-8-stage-cycle)
+5. [Four Ways to Use AHVS](#5-four-ways-to-use-ahvs)
+6. [Quick Start](#6-quick-start)
+7. [Onboarding a Target Repository](#7-onboarding-a-target-repository)
+8. [CLI Reference](#8-cli-reference)
+9. [Hypothesis Types](#9-hypothesis-types)
+10. [Skill Library](#10-skill-library)
+11. [Cross-Cycle Memory](#11-cross-cycle-memory)
+12. [Python API](#12-python-api)
+13. [Configuration Reference](#13-configuration-reference)
+14. [Directory Layout](#14-directory-layout)
+15. [Advanced Usage](#15-advanced-usage)
     - [Model Selection Strategy](#model-selection-strategy)
     - [Budget Planning for Experiments](#budget-planning-for-experiments)
     - [LLM Response Cache](#llm-response-cache)
@@ -48,7 +49,38 @@ Each cycle is self-contained and idempotent. The accumulated lessons steer futur
 
 ---
 
-## 2. Architecture
+## 2. Pipeline Stages
+
+AHVS has four user-facing stages that take you from a raw idea to optimized results. Each stage has a dedicated skill in Claude Code and a detailed guide in `docs/`.
+
+```
+/ahvs_brainstorm  →  /ahvs_genesis  →  /ahvs_onboarding  →  /ahvs_multiagent
+   "what & why"       "scaffold it"      "wire up eval"       "optimize it"
+```
+
+| Stage | Skill | What it does | Output | Detailed guide |
+|-------|-------|-------------|--------|----------------|
+| **1. Brainstorm** | `/ahvs_brainstorm` | Explores your problem space, proposes 2-3 approaches with trade-offs, writes a design doc. Asks what you have (data, repo, or idea) before proposing anything. | Design doc in `docs/ahvs/designs/` with pre-filled genesis inputs | [docs/ahvs_brainstorm.md](docs/ahvs_brainstorm.md) |
+| **2. Genesis** | `/ahvs_genesis` | Takes a problem + data and scaffolds a complete project: labels data, trains a model, measures baseline, registers in AHVS. | AHVS-ready project with `.ahvs/baseline_metric.json` | [docs/ahvs_genesis.md](docs/ahvs_genesis.md) |
+| **3. Onboarding** | `/ahvs_onboarding` | Wires up an existing repo for AHVS: creates headless eval command, writes baseline metric file, verifies everything works. | Verified `.ahvs/baseline_metric.json` + eval script | [docs/ahvs_onboarding.md](docs/ahvs_onboarding.md) |
+| **4. Multi-Agent Cycles** | `/ahvs_multiagent` | Runs the full 8-stage AHVS optimization cycle with executor + observer agents. Generates hypotheses, tests them in isolated worktrees, archives lessons. | Cycle report with keep/revert recommendations | [docs/ahvs_multiagent.md](docs/ahvs_multiagent.md) |
+
+**Not every stage is required.** Common paths:
+
+| Starting point | Path |
+|---------------|------|
+| Vague idea, no data | brainstorm → genesis → multiagent |
+| Data file, know what to build | genesis → multiagent |
+| Existing repo, needs AHVS setup | onboarding → multiagent |
+| Existing repo, already has `.ahvs/` | multiagent (directly) |
+
+Cross-cutting concerns are documented separately:
+- **Memory management:** [docs/memory_management_system.md](docs/memory_management_system.md)
+- **Security:** [docs/security_analysis.md](docs/security_analysis.md)
+
+---
+
+## 3. Architecture
 
 AHVS is a self-contained package with no external framework dependencies. Its core components are:
 
@@ -94,7 +126,7 @@ If the target path is not a git repository, AHVS auto-initializes one at Stage 1
 
 ---
 
-## 3. The 8-Stage Cycle
+## 4. The 8-Stage Cycle
 
 ```
 Stage 1  AHVS_SETUP            Auto-init git if needed, pre-flight checks (baseline, clean repo, LLM), cycle dir init
@@ -130,7 +162,7 @@ Every stage writes a checkpoint. A failed stage stops the cycle; later stages ar
 
 ---
 
-## 4. Four Ways to Use AHVS
+## 5. Four Ways to Use AHVS
 
 AHVS supports four usage modes depending on your workflow. All four produce identical results — same 8-stage cycle, same artifacts, same cross-cycle memory.
 
@@ -244,7 +276,7 @@ Your only manual step is clicking checkboxes in the browser. For fully automatic
 
 ---
 
-## 5. Quick Start
+## 6. Quick Start
 
 ### Installation
 
@@ -344,7 +376,7 @@ Create `.ahvs/baseline_metric.json` in your target repository (minimal):
 }
 ```
 
-For better hypothesis quality, include the enriched fields (see [Section 6.1](#61-baseline-metric-file)).
+For better hypothesis quality, include the enriched fields (see [Section 7.1](#71-baseline-metric-file)).
 
 ### Step 3 — Run a cycle
 
@@ -377,7 +409,7 @@ Or conversationally: `> Show me the results from the last AHVS cycle`
 
 ---
 
-## 6. Onboarding a Target Repository
+## 7. Onboarding a Target Repository
 
 AHVS needs four things from a target repo:
 
@@ -488,7 +520,7 @@ AHVS infers domain tags (`llm`, `rag`, `ml`, `prompt-driven`) by scanning `requi
 
 ---
 
-## 7. CLI Reference
+## 8. CLI Reference
 
 ### Genesis — bootstrap a new project from data
 
@@ -620,7 +652,7 @@ ahvs \
 
 ---
 
-## 8. Hypothesis Types
+## 9. Hypothesis Types
 
 AHVS generates hypotheses of these types. Each type controls what instructions, constraints, and package hints Claude Code receives:
 
@@ -682,7 +714,7 @@ The core pipeline (worktrees, eval_command, metric extraction, cross-cycle memor
 
 ---
 
-## 9. Skill Library
+## 10. Skill Library
 
 Skills are pre-built guidance templates injected into Claude Code's prompt context. Claude Code reads them, picks the right approach for the hypothesis type, and invokes the underlying tools directly in its generated code. Skills are **purely advisory** — they describe what tools are available and how to use them, but AHVS does not enforce, dispatch, or resolve skill invocations at runtime. The `skill_planned` field in `HypothesisResult` reflects the plan's declared skill, not a runtime observation.
 
@@ -722,7 +754,7 @@ skills:
 
 ---
 
-## 10. Cross-Cycle Memory
+## 11. Cross-Cycle Memory
 
 > **Full reference:** [docs/memory_management_system.md](docs/memory_management_system.md) covers the complete memory architecture including the LessonEntry schema, all weight boosts, compaction algorithms, and configuration reference.
 
@@ -804,7 +836,7 @@ Each entry stores the repo path, primary metric, baseline value, onboarding time
 
 ### Enriched onboarding context
 
-Stage 2 also forwards enriched fields from `baseline_metric.json` into the hypothesis-generation prompt. These fields — `optimization_goal`, `regression_floor`, `constraints`, `system_levers`, `prior_experiments`, `notes` — are written during onboarding (see [Section 6.1](#61-baseline-metric-file)) and appear in the prompt under "Operator Context". This gives the LLM richer intent signals without additional inference calls.
+Stage 2 also forwards enriched fields from `baseline_metric.json` into the hypothesis-generation prompt. These fields — `optimization_goal`, `regression_floor`, `constraints`, `system_levers`, `prior_experiments`, `notes` — are written during onboarding (see [Section 7.1](#71-baseline-metric-file)) and appear in the prompt under "Operator Context". This gives the LLM richer intent signals without additional inference calls.
 
 ### Hypothesis output format
 
@@ -816,7 +848,7 @@ Stage 6 detects incompatible hypothesis-type/eval-command combinations. If a `pr
 
 ---
 
-## 11. Python API
+## 12. Python API
 
 ```python
 from ahvs import AHVSConfig, execute_ahvs_cycle
@@ -906,7 +938,7 @@ Each `HypothesisResult` includes a `measurement_status` field that tracks whethe
 | `"sandbox_error"` | Hypothesis execution raised an exception before metric extraction (legacy name retained for compatibility) |
 | `"not_executed"` | Hypothesis was not executed (default state) |
 
-**Metric extraction policy** (see [Section 6.2](#62-eval-command) for full details):
+**Metric extraction policy** (see [Section 7.2](#72-evaluation-setup) for full details):
 
 When `eval_command` is configured, it is the **only trusted measurement source**. When `eval_command` is not configured, AHVS falls back to `result.json` in the work directory. If no source produces a valid metric, `measurement_status` is set to `"extraction_failed"`.
 
@@ -918,7 +950,7 @@ When `eval_command` is configured, it is the **only trusted measurement source**
 
 ---
 
-## 12. Configuration Reference
+## 13. Configuration Reference
 
 ### `AHVSConfig` fields
 
@@ -976,7 +1008,7 @@ Only the fields you specify are overridden; unspecified fields retain their defa
 
 ---
 
-## 13. Directory Layout
+## 14. Directory Layout
 
 ### Package structure
 
@@ -1105,7 +1137,7 @@ When AHVS agents start a cycle, they read `<repo>/.ahvs/memory/` to recall prior
 
 ---
 
-## 14. Advanced Usage
+## 15. Advanced Usage
 
 ### Running multiple cycles in sequence
 
