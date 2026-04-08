@@ -12,7 +12,10 @@ AHVS is a standalone cyclic hypothesis-validation pipeline that autonomously gen
 4. [The 8-Stage Optimization Cycle](#4-the-8-stage-optimization-cycle)
 5. [Four Ways to Use AHVS](#5-four-ways-to-use-ahvs)
 6. [Quick Start](#6-quick-start)
-7. [Onboarding a Target Repository](#7-onboarding-a-target-repository)
+7. [Pipeline Stage Details](#7-pipeline-stage-details)
+    - [7.1 Brainstorm](#71-brainstorm--design-before-building)
+    - [7.2 Genesis](#72-genesis--bootstrap-a-project-from-data)
+    - [7.3 Onboarding](#73-onboarding--prepare-a-repo-for-ahvs-cycles)
 8. [CLI Reference](#8-cli-reference)
 9. [Hypothesis Types](#9-hypothesis-types)
 10. [Skill Library](#10-skill-library)
@@ -419,11 +422,59 @@ Or conversationally: `> Show me the results from the last AHVS cycle`
 
 ---
 
-## 7. Onboarding a Target Repository
+## 7. Pipeline Stage Details
 
-AHVS needs a target repo with a baseline metric file and a reproducible eval command. The `/ahvs_onboarding` skill handles this automatically — it scans your repo, creates a headless eval script if needed, writes `.ahvs/baseline_metric.json`, and verifies everything works.
+Each stage has a dedicated skill in Claude Code and a detailed guide in `docs/`. This section provides a concise summary of each; follow the links for full workflows.
 
-For the full onboarding workflow, phases, and return contract, see **[docs/ahvs_onboarding.md](docs/ahvs_onboarding.md)**.
+### 7.1 Brainstorm — Design Before Building
+
+The `/ahvs_brainstorm` skill is a structured design-first workflow that answers **"what should we build and why?"** before committing to a solver or project structure.
+
+**How it works:**
+1. Asks what you have (data file, existing repo, or just an idea)
+2. Asks clarifying questions one at a time (multiple-choice when possible)
+3. Proposes 2-3 approaches with trade-offs and a recommendation
+4. Writes a design doc to `docs/ahvs/designs/YYYY-MM-DD-<topic>-design.md`
+5. Self-reviews for gaps and contradictions
+6. Waits for your approval — **hard gate: no implementation until approved**
+7. Hands off to genesis with pre-filled parameters
+
+**Usage:** `/ahvs_brainstorm` in Claude Code
+
+**When to skip:** If you already know the problem, data, metric, and approach — go straight to genesis.
+
+Full workflow, design doc format, and design principles: **[docs/ahvs_brainstorm.md](docs/ahvs_brainstorm.md)**
+
+### 7.2 Genesis — Bootstrap a Project from Data
+
+The `/ahvs_genesis` skill takes raw data and a problem description and scaffolds a complete AHVS-ready project.
+
+**How it works:**
+1. Collects inputs: problem description, data path, target metric, output directory, execution mode
+2. Routes the problem to the appropriate solver (e.g., `kd_classifier`)
+3. Labels data using an LLM, trains a model, measures a baseline
+4. Writes `.ahvs/baseline_metric.json` and registers the project in `~/.ahvs/registry.json`
+
+**Two execution modes:**
+- **Pipeline** (default) — Fast and deterministic. Requires knowing classes upfront.
+- **Agent** — Smarter but slower. Inspects data, discovers classes, generates optimal config.
+
+**Usage:** `/ahvs_genesis` or `/ahvs_genesis:gui` (browser form)
+
+**Important:** Output directory is always required — genesis never auto-generates a path.
+
+Full inputs, CLI flags, Python API, and cost policy: **[docs/ahvs_genesis.md](docs/ahvs_genesis.md)**
+
+### 7.3 Onboarding — Prepare a Repo for AHVS Cycles
+
+The `/ahvs_onboarding` skill takes an existing repository and wires it up for AHVS optimization.
+
+**How it works:**
+1. Scans the codebase for eval scripts, metrics, models, prior experiments
+2. Creates a headless eval command (extracts from notebooks/CI if needed)
+3. Aligns on optimization goals: which metric, regression guards, constraints
+4. Writes `.ahvs/baseline_metric.json` and registers the project
+5. Verifies the eval command produces parseable output
 
 **What AHVS requires from a target repo:**
 
@@ -447,12 +498,11 @@ For the full onboarding workflow, phases, and return contract, see **[docs/ahvs_
 
 For enriched fields (`optimization_goal`, `regression_floor`, `constraints`, `system_levers`, `prior_experiments`) that significantly improve hypothesis quality, see [docs/ahvs_onboarding.md — Section 4](docs/ahvs_onboarding.md#4-baseline-metric-file).
 
-**Onboarding modes:**
-- **Conversational (recommended):** `/ahvs_onboarding` in Claude Code
-- **Browser form:** `/ahvs_onboarding:gui`
-- **Manual:** Create `.ahvs/baseline_metric.json` directly
+**Usage:** `/ahvs_onboarding` or `/ahvs_onboarding:gui` (browser form). Or create `.ahvs/baseline_metric.json` manually.
 
 **Domain context** is automatic — AHVS infers domain tags (`llm`, `rag`, `ml`, `prompt-driven`) by scanning `requirements.txt`, `pyproject.toml`, and `package.json`.
+
+Full 8-phase workflow, return contract, and failure modes: **[docs/ahvs_onboarding.md](docs/ahvs_onboarding.md)**
 
 ---
 
