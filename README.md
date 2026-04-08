@@ -9,21 +9,21 @@ AHVS is a standalone cyclic hypothesis-validation pipeline that autonomously gen
 1. [Overview](#1-overview)
 2. [Pipeline Stages](#2-pipeline-stages)
 3. [Architecture](#3-architecture)
-4. [The 8-Stage Optimization Cycle](#4-the-8-stage-optimization-cycle)
+4. [Pipeline Stage Details](#4-pipeline-stage-details)
+    - [4.1 Brainstorm](#41-brainstorm--design-before-building)
+    - [4.2 Genesis](#42-genesis--bootstrap-a-project-from-data)
+    - [4.3 Onboarding](#43-onboarding--prepare-a-repo-for-ahvs-cycles)
+    - [4.4 The 8-Stage Optimization Cycle](#44-the-8-stage-optimization-cycle)
 5. [Four Ways to Use AHVS](#5-four-ways-to-use-ahvs)
 6. [Quick Start](#6-quick-start)
-7. [Pipeline Stage Details](#7-pipeline-stage-details)
-    - [7.1 Brainstorm](#71-brainstorm--design-before-building)
-    - [7.2 Genesis](#72-genesis--bootstrap-a-project-from-data)
-    - [7.3 Onboarding](#73-onboarding--prepare-a-repo-for-ahvs-cycles)
-8. [CLI Reference](#8-cli-reference)
-9. [Hypothesis Types](#9-hypothesis-types)
-10. [Skill Library](#10-skill-library)
-11. [Cross-Cycle Memory](#11-cross-cycle-memory)
-12. [Python API](#12-python-api)
-13. [Configuration Reference](#13-configuration-reference)
-14. [Directory Layout](#14-directory-layout)
-15. [Advanced Usage](#15-advanced-usage)
+7. [CLI Reference](#7-cli-reference)
+8. [Hypothesis Types](#8-hypothesis-types)
+9. [Skill Library](#9-skill-library)
+10. [Cross-Cycle Memory](#10-cross-cycle-memory)
+11. [Python API](#11-python-api)
+12. [Configuration Reference](#12-configuration-reference)
+13. [Directory Layout](#13-directory-layout)
+14. [Advanced Usage](#14-advanced-usage)
     - [Model Selection Strategy](#model-selection-strategy)
     - [Budget Planning for Experiments](#budget-planning-for-experiments)
     - [LLM Response Cache](#llm-response-cache)
@@ -130,9 +130,91 @@ If the target path is not a git repository, AHVS auto-initializes one at Stage 1
 
 ---
 
-## 4. The 8-Stage Optimization Cycle
+## 4. Pipeline Stage Details
 
-This is the **internal engine** that runs within each AHVS optimization cycle — invoked via CLI, Python API, or the `/ahvs_multiagent` skill. The pipeline stages in [Section 2](#2-pipeline-stages) (brainstorm, genesis, onboarding) are prerequisite workflow steps that prepare a project *before* this cycle runs.
+Each stage has a dedicated skill in Claude Code and a detailed guide in `docs/`. This section provides a concise summary of each; follow the links for full workflows.
+
+### 4.1 Brainstorm — Design Before Building
+
+The `/ahvs_brainstorm` skill is a structured design-first workflow that answers **"what should we build and why?"** before committing to a solver or project structure.
+
+**How it works:**
+1. Asks what you have (data file, existing repo, or just an idea)
+2. Asks clarifying questions one at a time (multiple-choice when possible)
+3. Proposes 2-3 approaches with trade-offs and a recommendation
+4. Writes a design doc to `docs/ahvs/designs/YYYY-MM-DD-<topic>-design.md`
+5. Self-reviews for gaps and contradictions
+6. Waits for your approval — **hard gate: no implementation until approved**
+7. Hands off to genesis with pre-filled parameters
+
+**Usage:** `/ahvs_brainstorm` in Claude Code
+
+**When to skip:** If you already know the problem, data, metric, and approach — go straight to genesis.
+
+Full workflow, design doc format, and design principles: **[docs/ahvs_brainstorm.md](docs/ahvs_brainstorm.md)**
+
+### 4.2 Genesis — Bootstrap a Project from Data
+
+The `/ahvs_genesis` skill takes raw data and a problem description and scaffolds a complete AHVS-ready project.
+
+**How it works:**
+1. Collects inputs: problem description, data path, target metric, output directory, execution mode
+2. Routes the problem to the appropriate solver (e.g., `kd_classifier`)
+3. Labels data using an LLM, trains a model, measures a baseline
+4. Writes `.ahvs/baseline_metric.json` and registers the project in `~/.ahvs/registry.json`
+
+**Two execution modes:**
+- **Pipeline** (default) — Fast and deterministic. Requires knowing classes upfront.
+- **Agent** — Smarter but slower. Inspects data, discovers classes, generates optimal config.
+
+**Usage:** `/ahvs_genesis` or `/ahvs_genesis:gui` (browser form)
+
+**Important:** Output directory is always required — genesis never auto-generates a path.
+
+Full inputs, CLI flags, Python API, and cost policy: **[docs/ahvs_genesis.md](docs/ahvs_genesis.md)**
+
+### 4.3 Onboarding — Prepare a Repo for AHVS Cycles
+
+The `/ahvs_onboarding` skill takes an existing repository and wires it up for AHVS optimization.
+
+**How it works:**
+1. Scans the codebase for eval scripts, metrics, models, prior experiments
+2. Creates a headless eval command (extracts from notebooks/CI if needed)
+3. Aligns on optimization goals: which metric, regression guards, constraints
+4. Writes `.ahvs/baseline_metric.json` and registers the project
+5. Verifies the eval command produces parseable output
+
+**What AHVS requires from a target repo:**
+
+| Requirement | What it is | Created by onboarding? |
+|-------------|-----------|----------------------|
+| `.ahvs/baseline_metric.json` | Primary metric, current value, eval command, constraints | Yes |
+| Headless eval command | Shell command that prints `metric_name: value` to stdout | Yes (extracts from notebooks/CI) |
+| Regression guard (optional) | Script that exits 0 if results pass quality checks | Yes (if applicable) |
+| Git repo (recommended) | AHVS uses worktrees for isolation | Auto-initialized if missing |
+
+**Minimal baseline file:**
+```json
+{
+  "primary_metric": "f1_score",
+  "f1_score": 0.81,
+  "recorded_at": "2026-03-18T09:00:00Z",
+  "commit": "d4e5f6a",
+  "eval_command": "python scripts/eval.py --dataset data/test.jsonl"
+}
+```
+
+For enriched fields (`optimization_goal`, `regression_floor`, `constraints`, `system_levers`, `prior_experiments`) that significantly improve hypothesis quality, see [docs/ahvs_onboarding.md — Section 4](docs/ahvs_onboarding.md#4-baseline-metric-file).
+
+**Usage:** `/ahvs_onboarding` or `/ahvs_onboarding:gui` (browser form). Or create `.ahvs/baseline_metric.json` manually.
+
+**Domain context** is automatic — AHVS infers domain tags (`llm`, `rag`, `ml`, `prompt-driven`) by scanning `requirements.txt`, `pyproject.toml`, and `package.json`.
+
+Full 8-phase workflow, return contract, and failure modes: **[docs/ahvs_onboarding.md](docs/ahvs_onboarding.md)**
+
+### 4.4 The 8-Stage Optimization Cycle
+
+This is the **internal engine** that runs within each AHVS optimization cycle — invoked via CLI, Python API, or the `/ahvs_multiagent` skill. The stages above (brainstorm, genesis, onboarding) are prerequisite workflow steps that prepare a project *before* this cycle runs. For multi-agent supervised execution, see **[docs/ahvs_multiagent.md](docs/ahvs_multiagent.md)**.
 
 ```
 Stage 1  AHVS_SETUP            Auto-init git if needed, pre-flight checks (baseline, clean repo, LLM), cycle dir init
@@ -422,91 +504,7 @@ Or conversationally: `> Show me the results from the last AHVS cycle`
 
 ---
 
-## 7. Pipeline Stage Details
-
-Each stage has a dedicated skill in Claude Code and a detailed guide in `docs/`. This section provides a concise summary of each; follow the links for full workflows.
-
-### 7.1 Brainstorm — Design Before Building
-
-The `/ahvs_brainstorm` skill is a structured design-first workflow that answers **"what should we build and why?"** before committing to a solver or project structure.
-
-**How it works:**
-1. Asks what you have (data file, existing repo, or just an idea)
-2. Asks clarifying questions one at a time (multiple-choice when possible)
-3. Proposes 2-3 approaches with trade-offs and a recommendation
-4. Writes a design doc to `docs/ahvs/designs/YYYY-MM-DD-<topic>-design.md`
-5. Self-reviews for gaps and contradictions
-6. Waits for your approval — **hard gate: no implementation until approved**
-7. Hands off to genesis with pre-filled parameters
-
-**Usage:** `/ahvs_brainstorm` in Claude Code
-
-**When to skip:** If you already know the problem, data, metric, and approach — go straight to genesis.
-
-Full workflow, design doc format, and design principles: **[docs/ahvs_brainstorm.md](docs/ahvs_brainstorm.md)**
-
-### 7.2 Genesis — Bootstrap a Project from Data
-
-The `/ahvs_genesis` skill takes raw data and a problem description and scaffolds a complete AHVS-ready project.
-
-**How it works:**
-1. Collects inputs: problem description, data path, target metric, output directory, execution mode
-2. Routes the problem to the appropriate solver (e.g., `kd_classifier`)
-3. Labels data using an LLM, trains a model, measures a baseline
-4. Writes `.ahvs/baseline_metric.json` and registers the project in `~/.ahvs/registry.json`
-
-**Two execution modes:**
-- **Pipeline** (default) — Fast and deterministic. Requires knowing classes upfront.
-- **Agent** — Smarter but slower. Inspects data, discovers classes, generates optimal config.
-
-**Usage:** `/ahvs_genesis` or `/ahvs_genesis:gui` (browser form)
-
-**Important:** Output directory is always required — genesis never auto-generates a path.
-
-Full inputs, CLI flags, Python API, and cost policy: **[docs/ahvs_genesis.md](docs/ahvs_genesis.md)**
-
-### 7.3 Onboarding — Prepare a Repo for AHVS Cycles
-
-The `/ahvs_onboarding` skill takes an existing repository and wires it up for AHVS optimization.
-
-**How it works:**
-1. Scans the codebase for eval scripts, metrics, models, prior experiments
-2. Creates a headless eval command (extracts from notebooks/CI if needed)
-3. Aligns on optimization goals: which metric, regression guards, constraints
-4. Writes `.ahvs/baseline_metric.json` and registers the project
-5. Verifies the eval command produces parseable output
-
-**What AHVS requires from a target repo:**
-
-| Requirement | What it is | Created by onboarding? |
-|-------------|-----------|----------------------|
-| `.ahvs/baseline_metric.json` | Primary metric, current value, eval command, constraints | Yes |
-| Headless eval command | Shell command that prints `metric_name: value` to stdout | Yes (extracts from notebooks/CI) |
-| Regression guard (optional) | Script that exits 0 if results pass quality checks | Yes (if applicable) |
-| Git repo (recommended) | AHVS uses worktrees for isolation | Auto-initialized if missing |
-
-**Minimal baseline file:**
-```json
-{
-  "primary_metric": "f1_score",
-  "f1_score": 0.81,
-  "recorded_at": "2026-03-18T09:00:00Z",
-  "commit": "d4e5f6a",
-  "eval_command": "python scripts/eval.py --dataset data/test.jsonl"
-}
-```
-
-For enriched fields (`optimization_goal`, `regression_floor`, `constraints`, `system_levers`, `prior_experiments`) that significantly improve hypothesis quality, see [docs/ahvs_onboarding.md — Section 4](docs/ahvs_onboarding.md#4-baseline-metric-file).
-
-**Usage:** `/ahvs_onboarding` or `/ahvs_onboarding:gui` (browser form). Or create `.ahvs/baseline_metric.json` manually.
-
-**Domain context** is automatic — AHVS infers domain tags (`llm`, `rag`, `ml`, `prompt-driven`) by scanning `requirements.txt`, `pyproject.toml`, and `package.json`.
-
-Full 8-phase workflow, return contract, and failure modes: **[docs/ahvs_onboarding.md](docs/ahvs_onboarding.md)**
-
----
-
-## 8. CLI Reference
+## 7. CLI Reference
 
 ### Genesis — bootstrap a new project from data
 
@@ -638,7 +636,7 @@ ahvs \
 
 ---
 
-## 9. Hypothesis Types
+## 8. Hypothesis Types
 
 AHVS generates hypotheses of these types. Each type controls what instructions, constraints, and package hints Claude Code receives:
 
@@ -700,7 +698,7 @@ The core pipeline (worktrees, eval_command, metric extraction, cross-cycle memor
 
 ---
 
-## 10. Skill Library
+## 9. Skill Library
 
 Skills are pre-built guidance templates injected into Claude Code's prompt context. Claude Code reads them, picks the right approach for the hypothesis type, and invokes the underlying tools directly in its generated code. Skills are **purely advisory** — they describe what tools are available and how to use them, but AHVS does not enforce, dispatch, or resolve skill invocations at runtime. The `skill_planned` field in `HypothesisResult` reflects the plan's declared skill, not a runtime observation.
 
@@ -740,7 +738,7 @@ skills:
 
 ---
 
-## 11. Cross-Cycle Memory
+## 10. Cross-Cycle Memory
 
 > **Full reference:** [docs/memory_management_system.md](docs/memory_management_system.md) covers the complete memory architecture including the LessonEntry schema, all weight boosts, compaction algorithms, and configuration reference.
 
@@ -834,7 +832,7 @@ Stage 6 detects incompatible hypothesis-type/eval-command combinations. If a `pr
 
 ---
 
-## 12. Python API
+## 11. Python API
 
 ```python
 from ahvs import AHVSConfig, execute_ahvs_cycle
@@ -936,7 +934,7 @@ When `eval_command` is configured, it is the **only trusted measurement source**
 
 ---
 
-## 13. Configuration Reference
+## 12. Configuration Reference
 
 ### `AHVSConfig` fields
 
@@ -994,7 +992,7 @@ Only the fields you specify are overridden; unspecified fields retain their defa
 
 ---
 
-## 14. Directory Layout
+## 13. Directory Layout
 
 ### Package structure
 
@@ -1123,7 +1121,7 @@ When AHVS agents start a cycle, they read `<repo>/.ahvs/memory/` to recall prior
 
 ---
 
-## 15. Advanced Usage
+## 14. Advanced Usage
 
 ### Running multiple cycles in sequence
 
