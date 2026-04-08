@@ -9,7 +9,7 @@ AHVS is a standalone cyclic hypothesis-validation pipeline that autonomously gen
 1. [Overview](#1-overview)
 2. [Pipeline Stages](#2-pipeline-stages)
 3. [Architecture](#3-architecture)
-4. [The 8-Stage Cycle](#4-the-8-stage-cycle)
+4. [The 8-Stage Optimization Cycle](#4-the-8-stage-optimization-cycle)
 5. [Four Ways to Use AHVS](#5-four-ways-to-use-ahvs)
 6. [Quick Start](#6-quick-start)
 7. [Onboarding a Target Repository](#7-onboarding-a-target-repository)
@@ -26,7 +26,8 @@ AHVS is a standalone cyclic hypothesis-validation pipeline that autonomously gen
     - [LLM Response Cache](#llm-response-cache)
     - [Prompt Engineering Tips](#prompt-engineering-tips)
     - [Multi-Agent Execution](#multi-agent-execution-with-claude-code-agent-teams)
-    - [Roadmap / TODOs](#roadmap--todos)
+    - [Features Added](#features-added)
+    - [Roadmap](#roadmap)
     - [Browser-Based Hypothesis Selector](#browser-based-hypothesis-selector)
     - [AST-Based Partial Output Merging](#ast-based-partial-output-merging-splice_functions)
     - [Test Coverage](#test-coverage)
@@ -126,7 +127,9 @@ If the target path is not a git repository, AHVS auto-initializes one at Stage 1
 
 ---
 
-## 4. The 8-Stage Cycle
+## 4. The 8-Stage Optimization Cycle
+
+This is the **internal engine** that runs within each AHVS optimization cycle — invoked via CLI, Python API, or the `/ahvs_multiagent` skill. The pipeline stages in [Section 2](#2-pipeline-stages) (brainstorm, genesis, onboarding) are prerequisite workflow steps that prepare a project *before* this cycle runs.
 
 ```
 Stage 1  AHVS_SETUP            Auto-init git if needed, pre-flight checks (baseline, clean repo, LLM), cycle dir init
@@ -177,14 +180,14 @@ Just describe what you want in natural language. No commands to memorize.
 > I have an idea for a classifier but no data yet — help me think it through
 ```
 
-The `ahvs_brainstorm` skill asks what you have (data, existing repo, or just an idea), then asks clarifying questions, proposes 2-3 approaches with trade-offs, and writes a design doc. No code runs until you approve the design.
+The `ahvs_brainstorm` skill asks what you have (data, existing repo, or just an idea), then asks clarifying questions, proposes 2-3 approaches with trade-offs, and writes a design doc. No code runs until you approve the design. See [docs/ahvs_brainstorm.md](docs/ahvs_brainstorm.md).
 
 **Onboarding a new repo:**
 ```
 > Onboard /path/to/my-project for AHVS — I want to improve precision without tanking F1
 ```
 
-The `ahvs_onboarding` skill will scan your repo, create a headless eval script if needed, write `.ahvs/baseline_metric.json`, and verify everything works.
+The `ahvs_onboarding` skill will scan your repo, create a headless eval script if needed, write `.ahvs/baseline_metric.json`, and verify everything works. See [docs/ahvs_onboarding.md](docs/ahvs_onboarding.md).
 
 **Running a cycle:**
 ```
@@ -360,7 +363,7 @@ The `ahvs_onboarding` skill will:
 5. Write an enriched `.ahvs/baseline_metric.json` with metrics, constraints, system levers, and prior experiments
 6. Verify the eval command produces parseable output
 
-It refuses to proceed until the setup is verified. See `.claude/skills/ahvs_onboarding/SKILL.md` for details.
+It refuses to proceed until the setup is verified. See [docs/ahvs_onboarding.md](docs/ahvs_onboarding.md) for details.
 
 **Option B: Manual setup**
 
@@ -376,7 +379,7 @@ Create `.ahvs/baseline_metric.json` in your target repository (minimal):
 }
 ```
 
-For better hypothesis quality, include the enriched fields (see [Section 7.1](#71-baseline-metric-file)).
+For better hypothesis quality, include the enriched fields (see [docs/ahvs_onboarding.md — Baseline Metric File](docs/ahvs_onboarding.md#4-baseline-metric-file)).
 
 ### Step 3 — Run a cycle
 
@@ -411,32 +414,20 @@ Or conversationally: `> Show me the results from the last AHVS cycle`
 
 ## 7. Onboarding a Target Repository
 
-AHVS needs four things from a target repo:
+AHVS needs a target repo with a baseline metric file and a reproducible eval command. The `/ahvs_onboarding` skill handles this automatically — it scans your repo, creates a headless eval script if needed, writes `.ahvs/baseline_metric.json`, and verifies everything works.
 
-### 6.1 Baseline metric file
+For the full onboarding workflow, phases, and return contract, see **[docs/ahvs_onboarding.md](docs/ahvs_onboarding.md)**.
 
-`.ahvs/baseline_metric.json` — required fields:
+**What AHVS requires from a target repo:**
 
-| Field | Description |
-|---|---|
-| `primary_metric` | Name of the metric to optimise (e.g. `precision`) |
-| `<primary_metric>` | Current numeric value of that metric (float) |
-| `recorded_at` | ISO-8601 timestamp when this baseline was measured |
-| `eval_command` | Headless shell command that prints `metric_name: value` to stdout |
-| `commit` | Git commit SHA when baseline was recorded. *(Recommended — AHVS emits a pre-flight warning if absent, since it cannot verify the baseline matches the current repo state.)* |
+| Requirement | What it is | Created by onboarding? |
+|-------------|-----------|----------------------|
+| `.ahvs/baseline_metric.json` | Primary metric, current value, eval command, constraints | Yes |
+| Headless eval command | Shell command that prints `metric_name: value` to stdout | Yes (extracts from notebooks/CI) |
+| Regression guard (optional) | Script that exits 0 if results pass quality checks | Yes (if applicable) |
+| Git repo (recommended) | AHVS uses worktrees for isolation | Auto-initialized if missing |
 
-Enriched fields (optional but strongly recommended — improves hypothesis quality):
-
-| Field | Description |
-|---|---|
-| `optimization_goal` | Plain English description of what to optimize and constraints |
-| `regression_floor` | Secondary metrics with minimum acceptable values, e.g. `{"f1_score": 0.62}` |
-| `constraints` | Budget limits, model restrictions, hypothesis scope requirements |
-| `system_levers` | Tunable parameters: strategies, modes, algorithmic areas with file paths |
-| `prior_experiments` | Results from past experiments with config details and identified problems |
-| `notes` | Additional context (dataset size, key insights, known hard cases) |
-
-**Minimal example:**
+**Minimal baseline file:**
 ```json
 {
   "primary_metric": "f1_score",
@@ -447,76 +438,14 @@ Enriched fields (optional but strongly recommended — improves hypothesis quali
 }
 ```
 
-**Enriched example** (produces better hypotheses):
-```json
-{
-  "primary_metric": "precision",
-  "precision": 0.7128,
-  "f1_score": 0.6699,
-  "recorded_at": "2026-03-19T10:00:00Z",
-  "commit": "9c41b35",
-  "eval_command": "cd /path/to/project && python -m package.run_eval --eval-only",
-  "optimization_goal": "Maximize precision while keeping f1_score >= 0.62",
-  "regression_floor": {"f1_score": 0.62},
-  "constraints": {
-    "model_budget": "Gemini 3.1 Flash Lite only. No expensive models.",
-    "hypothesis_scope": "Must include algorithmic changes, not just prompt rewrites."
-  },
-  "system_levers": {
-    "strategies": ["random", "keyword", "semantic"],
-    "algorithmic_areas": ["post_selector.py: selection strategy", "parsing.py: threshold tuning"]
-  },
-  "prior_experiments": {
-    "best_precision": {"config": "gpt54_kw_prv2", "precision": 0.76, "f1": 0.57, "problem": "F1 too low"}
-  }
-}
-```
+For enriched fields (`optimization_goal`, `regression_floor`, `constraints`, `system_levers`, `prior_experiments`) that significantly improve hypothesis quality, see [docs/ahvs_onboarding.md — Section 4](docs/ahvs_onboarding.md#4-baseline-metric-file).
 
-### 6.2 Evaluation setup
+**Onboarding modes:**
+- **Conversational (recommended):** `/ahvs_onboarding` in Claude Code
+- **Browser form:** `/ahvs_onboarding:gui`
+- **Manual:** Create `.ahvs/baseline_metric.json` directly
 
-Your `eval_command` is **executed in a git worktree** of the target repo after Claude Code's generated files are applied. It must be reproducible and must write a numeric result that can be parsed.
-
-AHVS extracts metrics using a two-path strategy depending on whether `eval_command` is configured:
-
-**When `eval_command` is configured (recommended):**
-
-| Tier | Source | Behavior |
-|---|---|---|
-| **0** | `eval_command` stdout (run in worktree) | **Only trusted source.** Metric parsed from stdout. |
-| — | `extraction_failed` | eval_command did not produce a valid metric |
-
-This is the authoritative-eval policy: when `eval_command` exists, it is the single source of truth.
-
-**When `eval_command` is empty or missing:**
-
-| Tier | Source | When used |
-|---|---|---|
-| 1 | `result.json` in work_dir or `agent_runs/*/` | Fallback metric source |
-| 2 | `extraction_failed` | No valid metric found — hypothesis is treated as **failed** |
-
-**Important:** A hypothesis with `measurement_status="extraction_failed"` is treated as an invalid experiment — it cannot count as "improved" even if the baseline value happens to produce `delta > 0`. If *all* hypotheses in a cycle fail measurement, Stage 8 marks the entire cycle as **FAILED** with an "INVALID CYCLE" recommendation.
-
-### 6.3 Regression guard (optional but recommended)
-
-A shell script that exits 0 if a result passes quality checks, non-zero if it regresses. The guard receives the path to a **canonical `result.json`** as its first argument — this file is always written after metric extraction (from any tier), so the guard never inspects a stale or missing file. **When configured, the guard is fail-closed:** if the script is missing, times out, or throws an error, AHVS treats the guard as failed and rejects the hypothesis.
-
-```bash
-# .ahvs/regression_guard.sh
-#!/bin/bash
-RESULT=$(jq '.answer_relevance' "$1")
-# Fail if more than 5% below baseline
-python -c "import sys; sys.exit(0 if float('$RESULT') >= 0.70 else 1)"
-```
-
-Pass it to AHVS:
-```bash
-ahvs --repo . --question "..." \
-  --regression-guard .ahvs/regression_guard.sh
-```
-
-### 6.4 Domain context (automatic)
-
-AHVS infers domain tags (`llm`, `rag`, `ml`, `prompt-driven`) by scanning `requirements.txt`, `pyproject.toml`, and `package.json`. These tags guide hypothesis generation without any manual setup.
+**Domain context** is automatic — AHVS infers domain tags (`llm`, `rag`, `ml`, `prompt-driven`) by scanning `requirements.txt`, `pyproject.toml`, and `package.json`.
 
 ---
 
@@ -546,7 +475,7 @@ ahvs genesis \
 | `--annotation-model` | `gpt-4.1-mini` | LLM for annotation (never gpt-4o) |
 | `--solver-registry` | *(built-in)* | Path to custom solvers.yaml |
 
-Genesis creates a project with `.ahvs/baseline_metric.json`, registers it in `~/.ahvs/registry.json`, and git-inits the directory. Use `/ahvs_genesis` in Claude Code for an interactive walkthrough.
+Genesis creates a project with `.ahvs/baseline_metric.json`, registers it in `~/.ahvs/registry.json`, and git-inits the directory. Use `/ahvs_genesis` in Claude Code for an interactive walkthrough. Full reference: [docs/ahvs_genesis.md](docs/ahvs_genesis.md).
 
 **Step-by-step workflow:**
 
@@ -836,7 +765,7 @@ Each entry stores the repo path, primary metric, baseline value, onboarding time
 
 ### Enriched onboarding context
 
-Stage 2 also forwards enriched fields from `baseline_metric.json` into the hypothesis-generation prompt. These fields — `optimization_goal`, `regression_floor`, `constraints`, `system_levers`, `prior_experiments`, `notes` — are written during onboarding (see [Section 7.1](#71-baseline-metric-file)) and appear in the prompt under "Operator Context". This gives the LLM richer intent signals without additional inference calls.
+Stage 2 also forwards enriched fields from `baseline_metric.json` into the hypothesis-generation prompt. These fields — `optimization_goal`, `regression_floor`, `constraints`, `system_levers`, `prior_experiments`, `notes` — are written during onboarding (see [docs/ahvs_onboarding.md — Baseline Metric File](docs/ahvs_onboarding.md#4-baseline-metric-file)) and appear in the prompt under "Operator Context". This gives the LLM richer intent signals without additional inference calls.
 
 ### Hypothesis output format
 
@@ -938,7 +867,7 @@ Each `HypothesisResult` includes a `measurement_status` field that tracks whethe
 | `"sandbox_error"` | Hypothesis execution raised an exception before metric extraction (legacy name retained for compatibility) |
 | `"not_executed"` | Hypothesis was not executed (default state) |
 
-**Metric extraction policy** (see [Section 7.2](#72-evaluation-setup) for full details):
+**Metric extraction policy** (see [docs/ahvs_onboarding.md — Evaluation Setup](docs/ahvs_onboarding.md#5-evaluation-setup) for full details):
 
 When `eval_command` is configured, it is the **only trusted measurement source**. When `eval_command` is not configured, AHVS falls back to `result.json` in the work directory. If no source produces a valid metric, `measurement_status` is set to `"extraction_failed"`.
 
@@ -1300,51 +1229,28 @@ AHVS caches LLM responses in a per-project SQLite database at `<repo>/.ahvs/.llm
 
 ### Multi-agent execution with Claude Code Agent Teams
 
-AHVS can be orchestrated by a multi-agent team using Claude Code's Agent Teams feature. This enables a supervisory pattern where:
+AHVS can be orchestrated by a **team of agents** (team lead, executor, observer) that coordinate hypothesis generation, execution, and verification. This enables supervised execution with automatic bug-fixing between hypotheses.
 
-- **Team Lead** generates hypotheses and coordinates the cycle
-- **Executor** (Sonnet) runs each hypothesis via the AHVS CLI
-- **Observer** (Opus) verifies results, classifies failures, and fixes framework bugs
-
-**To trigger multi-agent execution conversationally**, use the `ahvs_multiagent` skill (see `.claude/skills/ahvs_multiagent/SKILL.md`):
+**To trigger multi-agent execution**, use the `/ahvs_multiagent` skill in Claude Code:
 
 ```
 Run AHVS on /path/to/my-project with multi-agent supervision. 3 hypotheses.
 ```
 
-The skill encodes the exact 5-phase flow so nothing is left to improvisation:
-
-1. **Hypothesis generation** — Team Lead runs `--until-stage AHVS_HYPOTHESIS_GEN`, then opens the browser GUI for human selection (or auto-approves)
-2. **Team setup** — Team Lead spawns executor (sonnet) and observer (opus) with full prompts
-3. **Per-hypothesis loop** — Executor runs one hypothesis at a time; Observer verifies and fixes any framework bugs before the next hypothesis runs
-4. **Archive** — Team Lead runs Stages 7-8, shuts down the team, and reports summary
+For the full 5-phase flow, agent roles, failure classification, and error handling, see **[docs/ahvs_multiagent.md](docs/ahvs_multiagent.md)**.
 
 #### Running multi-agent with tmux
 
-The `ahvs_multiagent` skill handles everything — it spawns the executor and observer as subagents automatically via Claude Code's Agent Teams. You just need one Claude Code session. Use tmux so the session survives terminal disconnects and you can monitor progress:
+The skill handles everything — spawns executor and observer as subagents automatically. Use tmux so the session survives terminal disconnects:
 
 ```bash
-# Start a tmux session
 tmux new-session -s ahvs
-
-# Activate your environment and launch Claude Code
 conda activate py11
 claude
-
-# Inside Claude Code, say:
-# "Run AHVS on /path/to/project with multi-agent supervision. 3 hypotheses."
+# Inside Claude Code: "Run AHVS on /path/to/project with multi-agent supervision. 3 hypotheses."
 ```
 
-The skill will:
-1. Generate hypotheses (Stages 1-3)
-2. Open the browser GUI for selection (or auto-approve)
-3. Spawn executor + observer subagents automatically
-4. Run each hypothesis with verification between them
-5. Archive results and report summary
-
-You can detach from the tmux session (`Ctrl-b d`) and re-attach later (`tmux attach -t ahvs`) — the cycle keeps running.
-
-**tmux quick reference:**
+You can detach (`Ctrl-b d`) and re-attach later (`tmux attach -t ahvs`) — the cycle keeps running.
 
 | Shortcut | Action |
 |---|---|
@@ -1353,74 +1259,63 @@ You can detach from the tmux session (`Ctrl-b d`) and re-attach later (`tmux att
 | `Ctrl-b [` | Scroll mode (navigate output history) |
 | `q` | Exit scroll mode |
 
-### Roadmap / TODOs
+### Features Added
 
-AHVS already has a strong generic execution contract: repo + baseline metric + `eval_command` + isolated worktrees. That foundation should stay stable. The next work falls into six categories.
+| Feature | Description |
+|---------|-------------|
+| **CLI + GUI hypothesis add/insert/edit** | Add, insert, edit, reorder, and remove hypotheses via CLI flags (`--add-hypothesis`, `--edit-hypothesis`, `--insert-hypothesis`) and browser GUI (Add, Edit, Move Up/Down, Remove buttons). Applied at Stage 4 before selection. |
+| **Installable plugin / skills / installer** | `./install.sh` one-command installer. `ahvs install` / `ahvs update` / `ahvs uninstall` CLI subcommands. Skills bundled in wheel via `hatch force-include`, auto-copied to `~/.claude/skills/`. |
+| **Package & distribution** | `pip install ahvs` works with bundled skills. `./install.sh` handles full setup. |
+| **LLM response cache** | Content-addressable SQLite cache (`ahvs/llm/cache.py`) with SHA-256 keys, WAL mode, TTL support. Wraps all API-based LLM calls transparently. Disable with `--no-cache`. See [LLM Response Cache](#llm-response-cache). |
+| **Domain packs (LLM + ML)** | `--domain` flag with YAML-based packs (`ahvs/domain_packs/`). `llm` (default) for RAG/LLM optimization, `ml` for traditional ML (classifiers, regressors, NLP, CV, time series). |
+| **Memory management system** | Structured outcome fields, two-phase semantic deduplication, Stage 8 verification feedback, friction log summarization, session memory lifecycle, historical digest, cross-project learning via GlobalEvolutionStore. See [docs/memory_management_system.md](docs/memory_management_system.md). |
+| **Pre-genesis brainstorming** | `/ahvs_brainstorm` skill — structured design-first workflow before genesis. See [docs/ahvs_brainstorm.md](docs/ahvs_brainstorm.md). |
+| **Browser GUI forms** | `/ahvs_genesis:gui`, `/ahvs_onboarding:gui`, `/ahvs_multiagent:gui` — dark-themed browser forms for input collection. |
+| **Multi-agent execution** | `/ahvs_multiagent` skill — team lead + executor + observer pattern with failure classification and automatic bug-fixing. See [docs/ahvs_multiagent.md](docs/ahvs_multiagent.md). |
+| **AST-based partial output merging** | `splice_functions` in `worktree.py` — merges partial Claude Code outputs using AST rather than naive overwrite. See [below](#ast-based-partial-output-merging-splice_functions). |
 
-#### UX & distribution *(priority)*
+### Roadmap
 
-1. ~~**CLI + GUI hypothesis add/insert/edit**~~ **DONE**
-   Operators can now add, insert, edit, reorder, and remove hypotheses via both CLI flags and the browser-based GUI before execution.
-   - **CLI:** `--add-hypothesis '{"type":"code_change","description":"..."}'` (repeatable), `--edit-hypothesis 'H2:{"description":"..."}'`, `--insert-hypothesis '2:{"type":"...","description":"..."}'`
-   - **GUI:** The hypothesis selector now has Add, Edit, Move Up/Down, and Remove buttons on every card. Changes are persisted to `hypotheses.md` on submit.
-   - Modifications are applied at the start of Stage 4 (human selection), after hypothesis generation but before selection.
-2. ~~**Installable plugin / skills / installer**~~ **DONE**
-   Implemented: `./install.sh` one-command installer, `ahvs install` / `ahvs update` / `ahvs uninstall` CLI subcommands, skills bundled in wheel via `hatch force-include`, skills auto-copied to `~/.claude/skills/` for global availability.
-3. ~~**Package & distribution**~~ **DONE**
-   `pip install ahvs` works with bundled skills. `./install.sh` handles the full setup. Docker image is deferred.
-4. **Browser GUI for manual lesson/memory cleanup**
-   Add an interactive browser-based GUI (similar to hypothesis selector) that lets the operator inspect, filter, and selectively delete individual lessons from `lessons.jsonl` and memory files from `.ahvs/memory/`. Useful for curating cross-cycle memory when automatic compaction is insufficient.
+AHVS has a strong generic execution contract: repo + baseline metric + `eval_command` + isolated worktrees. That foundation is stable. Remaining work:
+
+#### UX
+
+1. **Browser GUI for lesson/memory cleanup** — Interactive GUI (similar to hypothesis selector) for inspecting, filtering, and deleting individual lessons from `lessons.jsonl` and memory files from `.ahvs/memory/`.
 
 #### Execution & runtime
 
-1. **Parallel hypothesis execution**
-   Hypotheses currently run sequentially. Parallel execution is feasible — Claude Code already runs inside per-hypothesis worktrees (done), so two remaining items are needed:
-   - Add `fcntl.flock` around `git worktree add/remove` to prevent metadata corruption
-   - Use `concurrent.futures` or `asyncio.gather` over the hypothesis list
-2. **Improve unattended throughput**
-   `save_results` already supports merge-by-ID accumulation, so batch and unattended execution should benefit once parallelism is in place. Multi-agent supervised mode benefits less because the observer verifies between hypotheses.
-3. **Jupyter notebook-style execution**
-   When execution scripts encounter errors, the current approach reruns the entire script. A notebook-style execution model would allow fixing only the failing cell and resuming from that point — reducing iteration time and preserving expensive intermediate state (loaded models, processed data).
-4. **Multi-agent decomposition**
-   Decompose the current agent architecture into more agents with narrower responsibilities — each agent becomes smarter and faster at its specific task. For example, separate plan-validator, code-reviewer, and test-runner agents instead of a single monolithic executor. This improves both speed (parallel specialist agents) and quality (each agent is deeply focused).
-5. ~~**LLM call deduplication / semantic cache**~~ **DONE** — Implemented in `ahvs/llm/cache.py`. Content-addressable SQLite cache with SHA-256 keys, WAL mode, TTL support, PII-safe defaults. Wraps all API-based LLM calls transparently via `CachedClientWrapper`. Disable with `--no-cache` or `LLM_CACHE_ENABLED=false`. See [LLM Response Cache](#llm-response-cache) for details.
+1. **Parallel hypothesis execution** — Add `fcntl.flock` around worktree operations + `concurrent.futures` over the hypothesis list.
+2. **Improve unattended throughput** — Batch execution benefits once parallelism is in place.
+3. **Jupyter notebook-style execution** — Fix only the failing cell and resume, preserving expensive intermediate state.
+4. **Multi-agent decomposition** — Narrower agents (plan-validator, code-reviewer, test-runner) instead of monolithic executor.
 
 #### Domain expansion
 
-The `--domain` flag and YAML-based domain packs (`ahvs/domain_packs/`) provide the adapter mechanism. Two domain packs are available: `llm` (default, LLM/RAG optimization) and `ml` (traditional ML — classifiers, regressors, NLP, CV, time series, etc.). For specialized tool chains (e.g., Hugging Face Trainer, torchvision augmentation), use `--skill-registry` with a project-specific YAML. Remaining work:
-
-1. **Multi-metric optimization** — Preserve the current primary-metric contract, but add first-class support for Pareto-optimal selection across multiple metrics (e.g., precision *and* recall, accuracy *and* latency)
-2. **Complex algorithmic tasks** — Extend AHVS to narrative improvement algorithms, knowledge graph improvement procedures, and other algorithmic-style hypothesis validation. These are structurally similar to ML optimization but operate on graph structures and text quality metrics. Align with existing autonomous research tools like AI Scientist / AI Scholar for structured experimental workflows.
-3. **Data analytics domain (exploratory)** — Investigate whether AHVS can drive data-focused hypothesis cycles: dataset selection, feature subset optimization, preprocessing pipeline tuning, data augmentation experiments. These fit the current loop well when there's a clear downstream metric (e.g., "which cleaning pipeline gives the best F1?"). Open-ended exploration (EDA, pattern discovery) would need a different output contract since AHVS currently requires a single numeric metric. A `data_prompts.yaml` pack would be the first step; structural changes only if prompt-level framing proves insufficient.
-4. **End-to-end examples** — Add worked examples for non-RAG repos (text classification, regression, data preprocessing) so users can see the full onboarding → cycle → results flow
+1. **Multi-metric optimization** — Pareto-optimal selection across multiple metrics (precision *and* recall, accuracy *and* latency).
+2. **Complex algorithmic tasks** — Knowledge graph improvement, narrative quality, graph-structure hypothesis validation.
+3. **Data analytics domain** — Dataset selection, feature subset optimization, preprocessing pipeline tuning.
+4. **End-to-end examples** — Worked examples for text classification, regression, data preprocessing.
 
 #### Platform integration
 
-1. **Databricks integration**
-   Large datasets live in the Databricks datalake and are impractical to download. AHVS needs to run natively on Databricks — via Databricks Asset Bundles or workflow jobs — so it can exploit datalake data directly on the platform for hypothesis execution and evaluation.
-2. **Knowledge distillation integration**
-   KD becomes a first-class AHVS hypothesis type (`knowledge_distillation`). AHVS wraps the KD pipeline, discovers optimal configurations (prompt strategy, model architecture, DSPy mode), and accumulates lessons across KD runs. See [Deep Analysis: AHVS × KD](Deep_Analysis_AHVS_KD.md) for the full integration architecture.
-3. **MLOps export** — Push cycle results to W&B, MLflow, or Comet for experiment tracking, model registry integration, and team-wide visibility.
-4. **GitHub CI integration** — PR-triggered AHVS cycles, eval-quality gates, Phoenix traces for observability.
-5. **MCP server for AHVS** — Expose AHVS as a Model Context Protocol service so that other LLM agents and tools can invoke AHVS cycles, query the evolution store, and access lessons programmatically.
+1. **Databricks integration** — Run AHVS natively on Databricks via Asset Bundles or workflow jobs.
+2. **Knowledge distillation integration** — KD as a first-class AHVS hypothesis type. See [docs/AHVS_KD_integration.md](docs/AHVS_KD_integration.md).
+3. **MLOps export** — Push cycle results to W&B, MLflow, or Comet.
+4. **GitHub CI integration** — PR-triggered AHVS cycles, eval-quality gates.
+5. **MCP server for AHVS** — Expose AHVS as a Model Context Protocol service.
 
 #### Intelligence & evolution
 
-Several ideas from NousResearch's [Hermes Agent Self-Evolution](https://github.com/NousResearch/hermes-agent-self-evolution) pipeline (DSPy GEPA, LLM-as-judge scoring, synthetic eval generation) could strengthen AHVS:
+1. **DSPy/GEPA prompt evolution** — Iteratively evolve prompts/configs over N generations with trace-informed mutations.
+2. **LLM-as-judge secondary evaluator** — Fast LLM-judge heuristic for intermediate hypothesis filtering.
+3. **AutoResearch priors** — Literature-grounded priors for hypothesis generation.
+4. **Synthetic eval dataset generation** — Auto-generate eval data from README/docstrings for repos without test suites.
+5. **Recursive self-improvement** — AHVS applies hypothesis-driven improvement to its own strategies.
+6. **Constraint gating for text artifacts** — Size limits and growth bounds for evolved prompts/configs.
 
-1. **DSPy/GEPA prompt evolution** — Instead of one-shot LLM rewrites, use DSPy GEPA to iteratively evolve prompts/configs over N generations with trace-informed mutations. This gives structured exploration of the prompt space rather than single-sample guesses. Integrate as an optional `--optimizer gepa` flag on prompt-type hypotheses.
-2. **LLM-as-judge secondary evaluator** — When `eval_command` is slow or expensive (e.g., full RAG pipeline runs), use a fast LLM-judge heuristic for intermediate hypothesis filtering, reserving the real eval for final holdout comparison. This could dramatically reduce eval cost per cycle.
-3. **AutoResearch** — Inject literature-grounded priors into hypothesis generation so cycles start from published best practices rather than cold-start guesses.
-4. **Synthetic eval dataset generation** — For repos that lack a formal eval harness, auto-generate train/val/holdout test cases from the repo's README, docstrings, and baseline metric description. This lowers the onboarding barrier for repos without existing test suites.
-5. **OpenClaw / PaperClip-style advanced capabilities** — Autonomous recursive self-improvement beyond a single cycle, where AHVS applies hypothesis-driven improvement to its own strategies and hypothesis templates.
-6. **Constraint gating for text artifacts** — Adopt size limits and growth bounds (e.g., max 15KB, max 2× baseline) for evolved prompts/configs to prevent unbounded prompt bloat across AHVS cycles.
+#### Memory
 
-#### Memory management *(mostly complete)*
-
-The core memory management overhaul is implemented (see [docs/memory_management_system.md](docs/memory_management_system.md)): structured outcome fields on lessons, two-phase semantic deduplication, Stage 8 verification feedback, friction log summarization, session memory lifecycle (stale marking + archival), historical digest for context window expansion, and cross-project learning via GlobalEvolutionStore. Remaining items:
-
-1. **LLM-based lesson summarization**
-   Periodically consolidate clusters of related lessons into summary entries (e.g., "5 threshold-tweak hypotheses tried across cycles X-Y, max +0.8% improvement") instead of keeping every raw entry. Reduces prompt token usage while preserving signal.
+1. **LLM-based lesson summarization** — Consolidate related lessons into summaries to reduce prompt token usage.
 
 ### Browser-based hypothesis selector
 
