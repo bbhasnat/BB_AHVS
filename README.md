@@ -182,6 +182,13 @@ Just describe what you want in natural language. No commands to memorize.
 
 The `ahvs_brainstorm` skill asks what you have (data, existing repo, or just an idea), then asks clarifying questions, proposes 2-3 approaches with trade-offs, and writes a design doc. No code runs until you approve the design. See [docs/ahvs_brainstorm.md](docs/ahvs_brainstorm.md).
 
+**Creating a project from data:**
+```
+> Build a classifier from emails.csv — classify intent into urgent, question, feedback, spam
+```
+
+The `ahvs_genesis` skill collects your problem description, data path, target metric, and output directory, then labels data, trains a model, and produces an AHVS-ready project with a measured baseline. See [docs/ahvs_genesis.md](docs/ahvs_genesis.md).
+
 **Onboarding a new repo:**
 ```
 > Onboard /path/to/my-project for AHVS — I want to improve precision without tanking F1
