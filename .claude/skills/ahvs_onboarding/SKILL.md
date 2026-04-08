@@ -209,45 +209,151 @@ Identify all tunable parameters in the codebase and encode them so AHVS generate
 
 This ensures AHVS hypotheses propose real algorithmic changes (post selection, threshold tuning, scoring logic) not just prompt rewrites.
 
-### Phase 5b: Enable LLM Response Caching
+### Phase 5b: Enforce LLM Response Caching (MANDATORY)
 
-**This is mandatory for all onboarded repos.** AHVS repos that make LLM API calls (OpenRouter, OpenAI, Anthropic) must have response caching enabled to avoid redundant API calls on re-runs, interrupted runs, and hypothesis re-execution.
+**This phase is mandatory for every onboarded repo.** It ensures that LLM API calls made by the target repo's own code are cached using `ahvs.llm.cache.LLMCache`. Without this, every AHVS hypothesis that requires re-inference pays full API cost even for prompts that haven't changed.
 
-**How it works:**
-- The AHVS package provides `ahvs.llm.cache.LLMCache` — a SQLite-backed, content-addressable response cache
-- Cache key = SHA-256 of (model, messages, temperature) — any parameter change produces a new key
-- Controlled via `LLM_CACHE_ENABLED` env var (default: `true`)
-- Cache lives in `<repo>/.ahvs/.llm_cache/responses.db`
+**AHVS provides two layers of caching:**
+1. **AHVS orchestration cache** — automatically covers AHVS's own calls (hypothesis generation, planning, reporting). Always enabled. No repo changes needed.
+2. **Target-repo inference cache** — covers the repo's own LLM API calls (e.g. classification, RAG, scoring). **This is what Phase 5b enforces.** Requires code changes in the repo.
 
-**What to do during onboarding:**
+#### Step 1: Detect — Does the repo make LLM API calls?
 
-1. **Check if the repo's LLM client uses caching.** Search for `LLMCache`, `cache`, or `_make_cache_key` in the repo's LLM client code.
+Search the codebase for LLM call patterns:
 
-2. **If no caching exists**, integrate it into the repo's LLM client. The pattern is:
-   ```python
-   # In the repo's llm_client.py or equivalent
-   from ahvs.llm.cache import LLMCache
+```
+Grep for: openai, anthropic, openrouter, litellm, requests.post.*completions,
+          httpx.*chat, create_llm_client, call_llm, .chat.completions
+```
 
-   cache = LLMCache(Path(".ahvs/.llm_cache"))
+Classify the result:
+- **API calls found** → proceed to Step 2
+- **ACP-only** (agent protocol, no direct API) → skip caching (ACP sessions are stateful). Print: `LLM caching: SKIPPED — repo uses ACP (stateful sessions, not cacheable)`
+- **No LLM calls** → skip caching. Print: `LLM caching: SKIPPED — no LLM API calls detected`
 
-   def call_llm(prompt):
-       key = make_cache_key(model, prompt, temperature)
-       cached = cache.get(key)
-       if cached:
-           return cached  # Skip API call
-       response = actual_api_call(prompt)
-       cache.put(key, content=response.text, model=model, ...)
-       return response
+#### Step 2: Check — Is caching already present?
+
+Search for existing cache integration:
+
+```
+Grep for: LLMCache, ahvs.llm.cache, prompt_cache, llm_cache, cache_key, PromptCache
+```
+
+- **Already integrated** → verify it uses `ahvs.llm.cache.LLMCache` (not a custom implementation). Print: `LLM caching: VERIFIED — already integrated in <file>:<line>`
+- **Custom cache exists** (e.g. JSONL-based, in-memory dict) → replace with `LLMCache` for consistency and durability. Print: `LLM caching: REPLACING custom cache in <file> with ahvs.llm.cache.LLMCache`
+- **No caching** → proceed to Step 3
+
+#### Step 3: Integrate — Wire `LLMCache` into the repo's LLM client
+
+The integration pattern depends on the repo's client interface. The AHVS cache class and the key function to use:
+
+```python
+from ahvs.llm.cache import LLMCache, _is_cache_enabled
+```
+
+**Pattern A: Callable-style client** (returns response from a function)
+
+This is the most common pattern. The repo has a function like `call_llm(prompt) -> Response`:
+
+```python
+from ahvs.llm.cache import LLMCache, _is_cache_enabled
+from pathlib import Path
+
+# Module-level: lazy-init singleton cache
+_cache: LLMCache | None = None
+
+def _get_cache(repo_root: Path) -> LLMCache | None:
+    global _cache
+    if _cache is not None:
+        return _cache
+    if not _is_cache_enabled():
+        return None
+    _cache = LLMCache(repo_root / ".ahvs" / ".llm_cache")
+    return _cache
+```
+
+Then, inside the function that makes the API call:
+
+```python
+def call_llm(prompt: str) -> LLMResponse:
+    cache = _get_cache(REPO_ROOT)
+    cache_key = None
+    if cache is not None:
+        cache_key = LLMCache.make_key(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+        )
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return LLMResponse(
+                text=cached["content"],
+                prompt_tokens=cached["tokens_in"],
+                completion_tokens=cached["tokens_out"],
+                total_tokens=cached["tokens_in"] + cached["tokens_out"],
+                model=cached["model"],
+            )
+
+    # ... existing API call logic ...
+    response = <actual_api_call>
+
+    if cache is not None and cache_key is not None:
+        cache.put(
+            cache_key,
+            content=response.text,
+            model=model,
+            tokens_in=response.prompt_tokens,
+            tokens_out=response.completion_tokens,
+        )
+    return response
+```
+
+**Pattern B: Class-based client with `.chat()` method**
+
+If the repo's client already has a `.chat()` method compatible with `CachedClientWrapper`:
+
+```python
+from ahvs.llm.cache import LLMCache, CachedClientWrapper, _is_cache_enabled
+
+if _is_cache_enabled():
+    cache = LLMCache(repo_root / ".ahvs" / ".llm_cache")
+    client = CachedClientWrapper(client, cache)
+```
+
+**Pattern C: Async client**
+
+Same as Pattern A, but the cache check/store wraps the async call. `LLMCache.get()` and `LLMCache.put()` are synchronous and fast (SQLite), so they can be called from async code without issues.
+
+#### Step 4: Gitignore and documentation
+
+1. **Add to `.gitignore`** (create if needed):
+   ```
+   .ahvs/.llm_cache/
    ```
 
-3. **Add `.ahvs/.llm_cache/` to `.gitignore`** — cache files are machine-local and should not be committed.
-
-4. **Document in baseline_metric.json** under `notes`:
+2. **Add to `baseline_metric.json`**:
    ```json
-   "llm_caching": "Enabled via ahvs.llm.cache.LLMCache in <file>. Control with LLM_CACHE_ENABLED env var."
+   "llm_caching": {
+     "enabled": true,
+     "backend": "ahvs.llm.cache.LLMCache",
+     "integrated_in": "<file_path>",
+     "cache_dir": ".ahvs/.llm_cache/",
+     "control": "LLM_CACHE_ENABLED env var (default: true)"
+   }
    ```
 
-**Why this matters:** Without caching, every AHVS hypothesis that requires re-inference pays full API cost even for identical prompts. A single interrupted run can waste hundreds of dollars on repeated calls. The checkpoint system prevents re-processing records, but caching prevents re-calling the API for the same prompt content.
+#### Step 5: Status message (REQUIRED)
+
+Phase 5b MUST print a clear status line in the final onboarding report (Phase 8). One of:
+
+```
+LLM caching: INTEGRATED — ahvs.llm.cache.LLMCache wired into <file>:<function> (N call sites)
+LLM caching: VERIFIED — already present in <file>:<line>
+LLM caching: REPLACED — custom cache in <file> replaced with ahvs.llm.cache.LLMCache
+LLM caching: SKIPPED — <reason: no LLM calls | ACP-only>
+```
+
+**Why this matters:** Without caching, every AHVS hypothesis that re-runs inference pays full API cost even for identical prompts. A single interrupted run can waste hundreds of dollars. The checkpoint system prevents re-processing records, but caching prevents re-calling the API for the same prompt content. Using a single cache implementation (`LLMCache`) across all repos ensures consistent behavior, durability (SQLite WAL), and control (env vars).
 
 ### Phase 6: Write Artifacts and Register in AHVS
 
@@ -328,6 +434,7 @@ Present a clear status block:
 **Model budget:** [constraints]
 **Eval command:** [command]
 **Eval verified:** yes — output matches baseline
+**LLM caching:** INTEGRATED | VERIFIED | REPLACED | SKIPPED — <details>
 **Files written:** .ahvs/baseline_metric.json, src/package/run_eval.py
 
 **Warnings:**
