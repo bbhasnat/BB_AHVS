@@ -2566,6 +2566,56 @@ def _run_single_hypothesis(
                     metric_value = extracted
                     measurement_status = "measured"
 
+        # ── Eval retry: re-apply files without splice and re-run ────
+        # If eval failed and Claude Code produced files, the AST splice
+        # may have produced broken code (silent fallback to original).
+        # Re-apply the raw Claude Code output directly and retry eval.
+        if (
+            measurement_status != "measured"
+            and generated_files
+            and eval_command
+            and worktree is not None
+        ):
+            logger.info(
+                "%s: eval failed after splice — retrying with direct "
+                "file application (no splice).",
+                hyp_id,
+            )
+            print(
+                f"[AHVS] {hyp_id}: eval retry — re-applying files "
+                f"without splice and re-running eval"
+            )
+            try:
+                worktree.apply_files(valid_files, splice=False)
+                eval_timeout = int(
+                    baseline.get("eval_timeout", config.eval_timeout_sec)
+                )
+                eval_result = worktree.run_eval_command(
+                    eval_command, timeout=eval_timeout
+                )
+                if eval_result.returncode == 0:
+                    extracted = _extract_metric_from_output(
+                        eval_result.stdout, metric_name
+                    )
+                    if extracted is not None:
+                        metric_value = extracted
+                        measurement_status = "measured"
+                        logger.info(
+                            "%s: eval RETRY succeeded — %s=%.4f",
+                            hyp_id, metric_name, metric_value,
+                        )
+                else:
+                    logger.warning(
+                        "%s: eval retry also failed (exit %d). stderr: %s",
+                        hyp_id, eval_result.returncode,
+                        eval_result.stderr[:500],
+                    )
+            except Exception as retry_exc:  # noqa: BLE001
+                logger.warning(
+                    "%s: eval retry raised exception: %s",
+                    hyp_id, retry_exc,
+                )
+
         # Extraction failed — log warning, keep baseline
         if measurement_status != "measured":
             measurement_status = "extraction_failed"

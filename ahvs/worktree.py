@@ -208,22 +208,20 @@ def splice_functions(original_src: str, partial_src: str) -> str:
     # Append new definitions — but BEFORE any `if __name__ == "__main__":`
     # block.  When new functions are placed after __main__, Python calls
     # main() before the new definitions are executed → NameError.
+    # Search result_lines (not orig_tree) because prior replacements may
+    # have shifted line numbers.
     if appends:
         main_guard_line: int | None = None
-        for node in orig_tree.body:
-            if (
-                isinstance(node, ast.If)
-                and isinstance(node.test, ast.Compare)
-                and isinstance(node.test.left, ast.Name)
-                and node.test.left.id == "__name__"
-            ):
-                main_guard_line = node.lineno - 1  # 0-indexed
+        for i, line in enumerate(result_lines):
+            stripped = line.strip()
+            if stripped.startswith("if __name__") and "__main__" in stripped:
+                main_guard_line = i
                 break
         if main_guard_line is not None:
             # Insert before the __main__ guard (with a blank line separator)
             insert_block = ["\n"] + appends + ["\n"]
-            for i, line in enumerate(insert_block):
-                result_lines.insert(main_guard_line + i, line)
+            for i, line_to_insert in enumerate(insert_block):
+                result_lines.insert(main_guard_line + i, line_to_insert)
         else:
             result_lines.extend(appends)
 
