@@ -435,10 +435,34 @@ class HypothesisWorktree:
         base = self.eval_cwd
         base_resolved = base.resolve()
 
+        # When repo_path is a subdirectory of the git root (e.g. autoqa/),
+        # the worktree is rooted at the git root but eval_cwd points to the
+        # subdir within the worktree.  Claude Code runs at the worktree root,
+        # so extracted paths include the subdir prefix (e.g.
+        # "autoqa/src/autoqa/parsing.py").  Resolve that prefix here to avoid
+        # path doubling (e.g. eval_cwd/autoqa/src/... → autoqa/autoqa/src/...).
+        _subdir_prefix = ""
+        if self.eval_cwd != self.worktree_path:
+            try:
+                _subdir_prefix = (
+                    str(self.eval_cwd.relative_to(self.worktree_path)) + "/"
+                )
+            except ValueError:
+                pass
+
         # Pre-build an index of existing .py files for smart matching
         existing_py: dict[str, list[Path]] | None = None
 
         for relpath, content in files.items():
+            # Strip subdir prefix to normalise paths from worktree-root frame
+            # into the eval_cwd frame expected by apply_files.
+            if _subdir_prefix and relpath.startswith(_subdir_prefix):
+                relpath = relpath[len(_subdir_prefix):]
+                logger.info(
+                    "apply_files: stripped subdir prefix %r → %r",
+                    _subdir_prefix.rstrip("/"), relpath,
+                )
+
             self._validate_relpath(relpath, base_resolved)
             dest = (base / relpath).resolve()
 
