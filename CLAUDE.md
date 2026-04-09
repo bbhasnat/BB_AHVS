@@ -83,7 +83,7 @@ Skills (`.claude/skills/`) define the full workflow; commands (`.claude/commands
 - `/ahvs_multiagent:gui` — Browser form for multi-agent cycle
 - `/ahvs_genesis` — Creates a new AHVS project from raw data
 - `/ahvs_genesis:gui` — Browser form for genesis
-- `/ahvs_data_analyst` — Goal-directed ML data analysis (profiles, EDA, class balance, text stats, duplicates [lexical/semantic/hybrid], subsample, split). Supports `--provider acp` for LLM-assisted planning and `--dedup-mode` for dedup strategy selection.
+- `/ahvs_data_analyst` — Goal-directed ML data analysis (profiles, EDA, class balance, text stats, duplicates [lexical/semantic/hybrid], embedding clustering, diversity subsample, split). Auto-escalates to hybrid dedup + clustering for large datasets. GPU required for semantic features; graceful fallback without. Supports `--provider acp` and `--dedup-mode`.
 - `/ahvs_data_analyst:gui` — Browser-based report viewer for data analyst results
 
 ## Tests

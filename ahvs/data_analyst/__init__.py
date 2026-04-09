@@ -102,11 +102,12 @@ def analyze(
     p = Path(data_path).resolve()
     df = _load_data(p, _detect_format(p))
 
-    # Inject dedup_mode into duplicates module params if specified
+    # Inject dedup_mode into duplicates module params if specified by user
     if dedup_mode:
         for spec in analysis_plan.modules:
             if spec.name == "duplicates":
                 spec.params["dedup_mode"] = dedup_mode
+                spec.params["_user_forced_dedup"] = True
 
     # Phase 3: Execute
     logger.info("Phase 3: Executing %d modules", len(analysis_plan.modules))

@@ -112,18 +112,41 @@ def _plan_heuristic(profile: DataProfile, goal: str) -> AnalysisPlan:
         )
 
     # Duplicate detection for text
+    will_subsample = profile.total_rows > 5000 and "subsample" in available
     if has_text and "duplicates" in available:
+        dedup_params: dict[str, Any] = {}
+        # Auto-escalate to hybrid when subsample follows — ensures
+        # semantic paraphrases are removed before diversity sampling.
+        if will_subsample:
+            dedup_params["dedup_mode"] = "hybrid"
+            dedup_params["_auto_escalated"] = True
         modules.append(
-            ModuleSpec(name="duplicates", reason="Check for redundant text samples.")
+            ModuleSpec(
+                name="duplicates",
+                params=dedup_params,
+                reason="Check for redundant text samples."
+                       + (" Auto-escalated to hybrid (subsample follows)." if will_subsample else ""),
+            )
+        )
+
+    # Clustering for diversity sampling (after dedup, before subsample)
+    if has_text and will_subsample and "cluster" in available:
+        modules.append(
+            ModuleSpec(
+                name="cluster",
+                reason="Embedding clusters for diversity sampling.",
+            )
         )
 
     # Subsampling for large datasets
-    if profile.total_rows > 5000 and "subsample" in available:
+    if will_subsample:
+        # Use diversity strategy when cluster module will run
+        strategy = "diversity" if "cluster" in available else "stratified"
         target = min(5000, profile.total_rows // 2)
         modules.append(
             ModuleSpec(
                 name="subsample",
-                params={"target_size": target, "strategy": "stratified"},
+                params={"target_size": target, "strategy": strategy},
                 reason=f"Large dataset ({profile.total_rows} rows).",
             )
         )

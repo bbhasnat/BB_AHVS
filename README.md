@@ -71,7 +71,7 @@ AHVS has four user-facing stages that take you from a raw idea to optimized resu
 | **2. Genesis** | `/ahvs_genesis` | Takes a problem + data and scaffolds a complete project: labels data, trains a model, measures baseline, registers in AHVS. | AHVS-ready project with `.ahvs/baseline_metric.json` | [docs/ahvs_genesis.md](docs/ahvs_genesis.md) |
 | **3. Onboarding** | `/ahvs_onboarding` | Wires up an existing repo for AHVS: creates headless eval command, writes baseline metric file, verifies everything works. | Verified `.ahvs/baseline_metric.json` + eval script | [docs/ahvs_onboarding.md](docs/ahvs_onboarding.md) |
 | **4. Multi-Agent Cycles** | `/ahvs_multiagent` | Runs the full 8-stage AHVS optimization cycle with executor + observer agents. Generates hypotheses, tests them in isolated worktrees, archives lessons. | Cycle report with keep/revert recommendations | [docs/ahvs_multiagent.md](docs/ahvs_multiagent.md) |
-| **Data Analyst** | `/ahvs_data_analyst`, `/ahvs_data_analyst:gui`, `ahvs data_analyst` | Goal-directed ML data analysis: profiles datasets, detects columns/labels, computes class balance and text stats, deduplicates, subsamples, splits, and exports. Supports ACP for LLM-assisted planning. `:gui` renders reports in browser. | Markdown + JSON report with visualizations | [docs/ahvs_data_analyst.md](docs/ahvs_data_analyst.md) |
+| **Data Analyst** | `/ahvs_data_analyst`, `/ahvs_data_analyst:gui`, `ahvs data_analyst` | Goal-directed ML data analysis: profiles datasets, detects columns/labels, computes class balance and text stats, deduplicates (lexical/semantic/hybrid), clusters embeddings, diversity-subsamples, splits, and exports. Auto-escalates to hybrid dedup + diversity sampling for large datasets. Supports ACP for LLM-assisted planning. `:gui` renders reports in browser. | Markdown + JSON report with visualizations | [docs/ahvs_data_analyst.md](docs/ahvs_data_analyst.md) |
 
 **Not every stage is required.** Common paths:
 
@@ -263,12 +263,14 @@ Data Path + Goal  →  Profile  →  Plan  →  Execute Modules  →  Report
                      (0 LLM)    (1 LLM)    (local)           (1 LLM)
 ```
 
-**7 built-in modules:** `eda` (descriptive stats + plots), `class_balance` (imbalance ratio, entropy), `text_stats` (token distributions, vocabulary), `duplicates` (exact + MinHash LSH fuzzy), `subsample` (stratified, balanced, diversity), `split` (train/val/test), `export` (CSV, Parquet, JSON, JSONL).
+**8 built-in modules:** `eda` (descriptive stats + plots), `class_balance` (imbalance ratio, entropy), `text_stats` (token distributions, vocabulary), `duplicates` (lexical / semantic / hybrid dedup), `cluster` (sentence-transformer embeddings + DBSCAN), `subsample` (stratified, balanced, diversity), `split` (train/val/test), `export` (CSV, Parquet, JSON, JSONL).
 
 **Key features:**
 - Auto-detects column roles (text input, numeric input, label, ID, timestamp, metadata)
 - Auto-detects label columns via pattern matching
-- Modules compose — `subsample → export` exports the subsampled data
+- **Smart pipeline for large datasets:** auto-escalates dedup to hybrid, inserts embedding clustering, switches subsample to diversity strategy
+- **GPU-aware:** semantic dedup and clustering use GPU when available, gracefully downgrade to lexical/stratified without GPU
+- Modules compose — `duplicates → cluster → subsample → export` chains transformed data downstream
 - Privacy-first — raw data never sent to LLM, only schema summaries
 - Produces markdown + JSON reports with visualizations
 
@@ -488,13 +490,13 @@ pip install -e ".[dev]"
 
 | Group | Packages | When needed |
 |-------|----------|-------------|
-| `semantic-dedup` | `sentence-transformers>=2.0`, `scikit-learn>=1.0`, `torch>=2.0` | `--dedup-mode semantic` or `--dedup-mode hybrid` in data analyst |
+| `semantic-dedup` | `sentence-transformers>=2.0`, `scikit-learn>=1.0`, `torch>=2.0` | `--dedup-mode semantic/hybrid` and embedding clustering in data analyst |
 | `split` | `scikit-learn>=1.0` | `split` module (stratified train/val/test) |
 | `anthropic` | `httpx>=0.24` | `--provider anthropic` (direct Anthropic API) |
 | `all` | All of the above | Full functionality |
 | `dev` | `all` + `pytest>=7.0` | Running tests |
 
-> **GPU note:** The `semantic-dedup` group installs PyTorch. For GPU acceleration (recommended for datasets >10K rows), ensure CUDA is available. The semantic dedup module auto-detects GPU and falls back to CPU. To force CPU: set `device: cpu` in `ahvs/data_analyst/configs/dedup_config.yaml`.
+> **GPU note:** The `semantic-dedup` group installs PyTorch. GPU is required by default for semantic dedup and embedding clustering — without GPU, both gracefully downgrade (dedup falls back to lexical, clustering is skipped). To force CPU execution: pass `--dedup-mode hybrid` explicitly, or set `device: cpu` in `ahvs/data_analyst/configs/dedup_config.yaml`.
 
 AHVS supports two LLM modes for its own orchestration calls (hypothesis generation, validation planning, reporting):
 

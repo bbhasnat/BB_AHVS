@@ -55,7 +55,7 @@ Ask the user for these values (only `data_path` is required):
 |-------|----------|---------|-------------|
 | `data_path` | Yes | — | Path to CSV, Parquet, JSON, or JSONL file |
 | `goal` | No | "general data analysis" | Natural-language goal (e.g., "build intent classifier") |
-| `modules` | No | auto-selected | Comma-separated: eda, class_balance, text_stats, duplicates, subsample, split, export |
+| `modules` | No | auto-selected | Comma-separated: eda, class_balance, text_stats, duplicates, cluster, subsample, split, export |
 | `dedup_mode` | No | from config | Deduplication mode: `lexical`, `semantic`, or `hybrid` |
 | `output_dir` | No | `analysis_<timestamp>/` | Where to write results |
 | `label` | No | auto-detected | Force a specific column as the label |

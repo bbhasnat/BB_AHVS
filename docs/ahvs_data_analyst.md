@@ -83,21 +83,28 @@ User Goal + Data Path
 
 ## 3. Analysis Modules
 
-Seven modules ship with v1. Each is independently runnable and follows a standard interface.
+Eight modules ship with v1. Each is independently runnable and follows a standard interface.
 
 | Module | What it does | Requires label? | Produces figures? |
 |--------|-------------|-----------------|-------------------|
 | **eda** | Descriptive statistics, dtype breakdown, missing values, encoding issues, numeric histograms, categorical bar charts | No | Yes |
 | **class_balance** | Class counts, percentages, imbalance ratio, Shannon entropy, distribution bar chart | Yes | Yes |
 | **text_stats** | Character/word length distributions, vocabulary size, duplicates, empty texts, per-class breakdown | No (enhanced with label) | Yes |
-| **duplicates** | Three dedup modes: *lexical* (MinHash LSH), *semantic* (sentence-transformers + DBSCAN), *hybrid* (lexical then semantic). Configurable via `dedup_config.yaml` or `--dedup-mode` | No | No |
+| **duplicates** | Three dedup modes: *lexical* (MinHash LSH), *semantic* (sentence-transformers + DBSCAN), *hybrid* (lexical then semantic). Configurable via `dedup_config.yaml` or `--dedup-mode`. Auto-escalates to hybrid when subsample follows | No | No |
+| **cluster** | Sentence-transformer embeddings + DBSCAN clustering. Adds `cluster_label` column for diversity sampling. Reuses embeddings from semantic dedup when available | No | No |
 | **subsample** | Intelligent data selection: stratified, class-balanced, diversity, or random sampling | No (enhanced with label) | No |
 | **split** | Train/val/test split with configurable ratios and stratification | No (stratified with label) | No |
 | **export** | Save dataset to CSV, Parquet, JSON, or JSONL with optional column selection and filtering | No | No |
 
 ### Module composition
 
-Modules run sequentially. When a module transforms data (e.g., `subsample`), downstream modules receive the transformed DataFrame. For example, `subsample -> export` exports the subsampled data, not the original.
+Modules run sequentially. When a module transforms data (e.g., `duplicates`, `cluster`, `subsample`), downstream modules receive the transformed DataFrame. The standard pipeline for large text datasets is:
+
+```
+eda → class_balance → text_stats → duplicates (hybrid) → cluster → subsample (diversity) → split → export
+```
+
+The planner automatically selects this order. When `duplicates` and `subsample` are both selected, dedup auto-escalates to `hybrid` and subsample uses `diversity` strategy (cluster-proportional sampling). GPU is required for the semantic pass and clustering — without GPU, both downgrade gracefully (dedup falls back to lexical, cluster is skipped, subsample falls back to stratified).
 
 ## 4. CLI Reference
 
@@ -393,7 +400,18 @@ duplicates/
 └── embeddings_text.npy       # Saved embeddings (semantic/hybrid only)
 ```
 
-The deduplication module sets `transformed_df`, so all downstream modules (subsample, split, export) automatically operate on the deduplicated data.
+The deduplication module sets `transformed_df`, so all downstream modules (cluster, subsample, split, export) automatically operate on the deduplicated data.
+
+### Auto-escalation
+
+When the planner selects both `duplicates` and `subsample` (i.e., large text datasets), dedup auto-escalates from `lexical` to `hybrid`. This ensures semantic paraphrases are removed before diversity sampling.
+
+### GPU policy
+
+Semantic dedup and clustering **require a GPU** by default:
+- **GPU available:** hybrid dedup + embedding clustering run normally
+- **GPU unavailable:** dedup downgrades to lexical, clustering is skipped, subsample falls back to stratified. A warning is logged.
+- **User override:** `--dedup-mode hybrid` or `--dedup-mode semantic` forces CPU execution even without GPU
 
 ## 8. Report Output
 
@@ -415,6 +433,8 @@ analysis_20260408_143022/
 |   +-- deduplicated.parquet
 |   +-- duplicate_groups.json
 |   +-- embeddings_text.npy         (semantic/hybrid only)
++-- cluster/
+|   +-- embeddings_text.npy         (only if not reused from duplicates)
 +-- split/
 |   +-- train.parquet
 |   +-- val.parquet
@@ -497,7 +517,7 @@ registry.register("my_module", my_custom_run)
 
 | Version | Scope |
 |---------|-------|
-| **v1 (current)** | Profiling, EDA, class balance, text stats, duplicates (lexical/semantic/hybrid), subsample, split, export |
+| **v1 (current)** | Profiling, EDA, class balance, text stats, duplicates (lexical/semantic/hybrid), embedding clustering, diversity subsample, split, export |
 | **v2** | Synthetic text generation (augment), correlation analysis, outlier detection, uncertainty sampling |
 | **v3** | CV support, regression tasks, NER, multi-file datasets |
 | **v4** | Active learning loops with AHVS cycle integration |

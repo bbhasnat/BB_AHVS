@@ -33,6 +33,7 @@ _BUILTIN_MODULES = [
     "class_balance",
     "text_stats",
     "duplicates",
+    "cluster",
     "subsample",
     "split",
     "export",

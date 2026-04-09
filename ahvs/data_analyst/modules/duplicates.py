@@ -130,6 +130,23 @@ def run(inp: ModuleInput) -> ModuleResult:
     cfg = _merge_params(_load_config(), params)
     mode = cfg.get("dedup_mode", "lexical")
     deduplicate = cfg.get("deduplicate", True)
+    user_forced = params.get("_user_forced_dedup", False)
+
+    # GPU guard: semantic/hybrid requires GPU unless user explicitly forced it.
+    if mode in ("semantic", "hybrid") and not user_forced:
+        try:
+            import torch
+            gpu_available = torch.cuda.is_available()
+        except ImportError:
+            gpu_available = False
+        if not gpu_available:
+            original_mode = mode
+            mode = "lexical"
+            logger.warning(
+                "GPU unavailable — downgrading dedup from '%s' to 'lexical'. "
+                "Use --dedup-mode %s to force CPU execution.",
+                original_mode, original_mode,
+            )
 
     # Use only the first text column for dedup to avoid cross-column union
     # removing unique rows because a low-cardinality auxiliary column repeats.
