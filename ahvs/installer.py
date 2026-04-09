@@ -19,11 +19,11 @@ _CLAUDE_COMMANDS_DIR = Path.home() / ".claude" / "commands"
 _AHVS_HOME = Path.home() / ".ahvs"
 
 # Skill directories to install
-SKILL_NAMES = ["ahvs_brainstorm", "ahvs_genesis", "ahvs_multiagent", "ahvs_onboarding"]
+SKILL_NAMES = ["ahvs_brainstorm", "ahvs_data_analyst", "ahvs_genesis", "ahvs_multiagent", "ahvs_onboarding"]
 
 # Command directories to install (subcommand registration)
 # Each maps to ~/.claude/commands/<dir_name>/gui.md
-COMMAND_DIRS = ["ahvs_genesis", "ahvs_multiagent", "ahvs_onboarding"]
+COMMAND_DIRS = ["ahvs_data_analyst", "ahvs_genesis", "ahvs_multiagent", "ahvs_onboarding"]
 
 
 def _check_python_version() -> list[str]:

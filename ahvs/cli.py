@@ -542,6 +542,44 @@ def cmd_uninstall(argv: list[str]) -> int:
 # ahvs data_analyst
 # -------------------------------------------------------------------
 
+
+def _build_data_analyst_llm_client(args: argparse.Namespace):
+    """Build an LLM client for the data analyst from CLI args.
+
+    Reuses the same shim pattern as ``executor._make_llm_client`` but
+    without requiring a full AHVSConfig.
+    """
+    import os
+    from ahvs.llm import create_llm_client
+
+    class _AcpShim:
+        __slots__ = ("agent", "cwd", "acpx_command", "session_name", "timeout_sec")
+        def __init__(self, a):
+            self.agent = a.acp_agent
+            self.cwd = os.path.abspath(".")
+            self.acpx_command = a.acpx_command
+            self.session_name = a.acp_session_name
+            self.timeout_sec = a.acp_timeout_sec
+
+    class _LlmShim:
+        __slots__ = ("provider", "base_url", "api_key", "api_key_env",
+                      "primary_model", "fallback_models", "acp")
+        def __init__(self, a):
+            self.provider = a.provider
+            self.base_url = a.base_url
+            self.api_key = os.environ.get(a.api_key_env, "")
+            self.api_key_env = a.api_key_env
+            self.primary_model = a.model
+            self.fallback_models = ()
+            self.acp = _AcpShim(a)
+
+    class _ConfigShim:
+        __slots__ = ("llm",)
+        def __init__(self, a):
+            self.llm = _LlmShim(a)
+
+    return create_llm_client(_ConfigShim(args))
+
 def cmd_data_analyst(argv: list[str]) -> int:
     """Run the data analyst pipeline on a dataset."""
     import logging
@@ -551,8 +589,12 @@ def cmd_data_analyst(argv: list[str]) -> int:
         description="Analyse a dataset for ML readiness.",
     )
     parser.add_argument(
-        "--data", "-d", required=True,
+        "--data", "-d", default=None,
         help="Path to data file (CSV, Parquet, JSON, JSONL).",
+    )
+    parser.add_argument(
+        "--view", default=None,
+        help="Path to analysis_report.md or output directory — opens report in browser.",
     )
     parser.add_argument(
         "--goal", "-g", default="",
@@ -586,6 +628,42 @@ def cmd_data_analyst(argv: list[str]) -> int:
         "--verbose", "-v", action="store_true",
         help="Enable verbose logging.",
     )
+
+    # ── LLM provider flags (enables ACP / API-based planning) ────────
+    parser.add_argument(
+        "--provider", default=None,
+        choices=["anthropic", "openai", "openai-compatible", "openrouter", "deepseek", "acp"],
+        help="LLM provider for Phase 2 planning. Omit for heuristic (no LLM). Use 'acp' for local agent (Claude Code, Codex).",
+    )
+    parser.add_argument(
+        "--model", default="claude-opus-4-6",
+        help="LLM model ID (default: claude-opus-4-6).",
+    )
+    parser.add_argument(
+        "--api-key-env", default="ANTHROPIC_API_KEY",
+        help="Environment variable holding the LLM API key (default: ANTHROPIC_API_KEY).",
+    )
+    parser.add_argument(
+        "--base-url", default="",
+        help="Override LLM base URL (required for --provider openai-compatible).",
+    )
+    parser.add_argument(
+        "--acp-agent", default="claude",
+        help="ACP agent CLI name (default: claude). Only used with --provider acp.",
+    )
+    parser.add_argument(
+        "--acpx-command", default="",
+        help="Path to acpx binary (auto-detected if omitted). Only used with --provider acp.",
+    )
+    parser.add_argument(
+        "--acp-session-name", default="ahvs-data-analyst",
+        help="ACP session name (default: ahvs-data-analyst). Only used with --provider acp.",
+    )
+    parser.add_argument(
+        "--acp-timeout", type=int, default=1800, dest="acp_timeout_sec",
+        help="ACP per-prompt timeout in seconds (default: 1800). Only used with --provider acp.",
+    )
+
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -593,8 +671,23 @@ def cmd_data_analyst(argv: list[str]) -> int:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
+    # ── View mode: serve existing report in browser ──────────────────
+    if args.view:
+        from ahvs.report_viewer import serve_report
+        serve_report(args.view, port=8765)
+        return 0
+
+    # ── Analysis mode: --data is required ────────────────────────────
+    if not args.data:
+        parser.error("--data is required (or use --view to display an existing report)")
+
     modules_list = args.modules.split(",") if args.modules else None
     input_list = args.inputs.split(",") if args.inputs else None
+
+    # ── Build LLM client if provider specified ───────────────────────
+    llm_client = None
+    if args.provider:
+        llm_client = _build_data_analyst_llm_client(args)
 
     from ahvs.data_analyst import analyze
 
@@ -607,6 +700,7 @@ def cmd_data_analyst(argv: list[str]) -> int:
         label_hint=args.label,
         input_hint=input_list,
         nrows=args.nrows,
+        llm_client=llm_client,
     )
 
     print(f"\nAnalysis complete. Completeness: {report.completeness_score():.0f}%")

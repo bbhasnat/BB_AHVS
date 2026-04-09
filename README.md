@@ -71,7 +71,7 @@ AHVS has four user-facing stages that take you from a raw idea to optimized resu
 | **2. Genesis** | `/ahvs_genesis` | Takes a problem + data and scaffolds a complete project: labels data, trains a model, measures baseline, registers in AHVS. | AHVS-ready project with `.ahvs/baseline_metric.json` | [docs/ahvs_genesis.md](docs/ahvs_genesis.md) |
 | **3. Onboarding** | `/ahvs_onboarding` | Wires up an existing repo for AHVS: creates headless eval command, writes baseline metric file, verifies everything works. | Verified `.ahvs/baseline_metric.json` + eval script | [docs/ahvs_onboarding.md](docs/ahvs_onboarding.md) |
 | **4. Multi-Agent Cycles** | `/ahvs_multiagent` | Runs the full 8-stage AHVS optimization cycle with executor + observer agents. Generates hypotheses, tests them in isolated worktrees, archives lessons. | Cycle report with keep/revert recommendations | [docs/ahvs_multiagent.md](docs/ahvs_multiagent.md) |
-| **Data Analyst** | `ahvs data_analyst` | Goal-directed ML data analysis: profiles datasets, detects columns/labels, computes class balance and text stats, deduplicates, subsamples, splits, and exports. | Markdown + JSON report with visualizations | [docs/ahvs_data_analyst.md](docs/ahvs_data_analyst.md) |
+| **Data Analyst** | `/ahvs_data_analyst`, `/ahvs_data_analyst:gui`, `ahvs data_analyst` | Goal-directed ML data analysis: profiles datasets, detects columns/labels, computes class balance and text stats, deduplicates, subsamples, splits, and exports. Supports ACP for LLM-assisted planning. `:gui` renders reports in browser. | Markdown + JSON report with visualizations | [docs/ahvs_data_analyst.md](docs/ahvs_data_analyst.md) |
 
 **Not every stage is required.** Common paths:
 
@@ -273,8 +273,14 @@ Data Path + Goal  →  Profile  →  Plan  →  Execute Modules  →  Report
 - Produces markdown + JSON reports with visualizations
 
 ```bash
-# CLI
+# CLI — heuristic planner (no LLM)
 ahvs data_analyst --data absa.parquet --goal "ABSA classifier" --label sentiment
+
+# CLI — ACP provider (uses Claude Code / Codex for smart planning)
+ahvs data_analyst --data absa.parquet --goal "ABSA classifier" --provider acp
+
+# Claude Code skill (conversational)
+/data_analyst
 
 # Python
 from ahvs.data_analyst import analyze
@@ -587,7 +593,7 @@ ahvs --repo my_classifier --question "improve f1_weighted to 0.85" --domain ml
 ### Data Analyst — analyse a dataset for ML readiness
 
 ```bash
-ahvs data_analyst --data absa.parquet --goal "build ABSA classifier" --label sentiment
+ahvs data_analyst --data absa.parquet --goal "build ABSA classifier" --provider acp
 ```
 
 | Flag | Default | Description |
@@ -601,6 +607,22 @@ ahvs data_analyst --data absa.parquet --goal "build ABSA classifier" --label sen
 | `--inputs` | *(auto-detect)* | Comma-separated input columns |
 | `--nrows` | *(all)* | Limit rows for quick profiling |
 | `--verbose`, `-v` | off | Verbose logging |
+| `--provider` | *(none — heuristic)* | LLM provider for Phase 2 planning: `acp`, `anthropic`, `openai`, `openrouter`, `deepseek`, `openai-compatible` |
+| `--model` | `claude-opus-4-6` | LLM model ID |
+| `--api-key-env` | `ANTHROPIC_API_KEY` | Env var holding the LLM API key |
+| `--base-url` | `""` | Override LLM base URL (required for `openai-compatible`) |
+| `--acp-agent` | `claude` | ACP agent CLI name (only with `--provider acp`) |
+| `--acp-session-name` | `ahvs-data-analyst` | ACP session name (only with `--provider acp`) |
+| `--acp-timeout` | `1800` | ACP per-prompt timeout in seconds |
+
+**Claude Code skills:**
+- `/ahvs_data_analyst` — conversational interface that collects inputs and runs the pipeline with ACP by default
+- `/ahvs_data_analyst:gui` — opens an existing analysis report as a styled HTML page in the browser (dark theme, embedded figures)
+
+```bash
+# View an existing report in the browser
+ahvs data_analyst --view analysis_20260408/analysis_report.md
+```
 
 Full reference: [docs/ahvs_data_analyst.md](docs/ahvs_data_analyst.md).
 

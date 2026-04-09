@@ -116,14 +116,36 @@ ahvs data_analyst [options]
 | `--inputs` | *(auto-detect)* | Comma-separated list of input columns |
 | `--nrows` | *(all)* | Limit rows for quick profiling (full data still used for execution) |
 | `--verbose`, `-v` | off | Enable verbose logging |
+| `--view` | *(none)* | Path to `analysis_report.md` or output directory — opens report in browser instead of running analysis |
+
+#### LLM Provider Flags
+
+These flags enable LLM-assisted planning in Phase 2. If `--provider` is omitted, the heuristic planner is used (no LLM call).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--provider` | *(none — heuristic)* | LLM provider: `acp`, `anthropic`, `openai`, `openrouter`, `deepseek`, `openai-compatible` |
+| `--model` | `claude-opus-4-6` | LLM model ID |
+| `--api-key-env` | `ANTHROPIC_API_KEY` | Env var holding the LLM API key |
+| `--base-url` | `""` | Override LLM base URL (required for `openai-compatible`) |
+| `--acp-agent` | `claude` | ACP agent CLI name (only with `--provider acp`) |
+| `--acpx-command` | *(auto-detect)* | Path to acpx binary (only with `--provider acp`) |
+| `--acp-session-name` | `ahvs-data-analyst` | ACP session name (only with `--provider acp`) |
+| `--acp-timeout` | `1800` | ACP per-prompt timeout in seconds (only with `--provider acp`) |
 
 ### Examples
 
 ```bash
-# Full automatic analysis
+# Full automatic analysis (heuristic planner, no LLM)
 ahvs data_analyst --data emails.csv --goal "build intent classifier"
 
-# Specific modules only
+# With ACP — Claude Code/Codex plans which modules to run
+ahvs data_analyst --data emails.csv --goal "build intent classifier" --provider acp
+
+# With Anthropic API
+ahvs data_analyst --data emails.csv --goal "build intent classifier" --provider anthropic
+
+# Specific modules only (skips planning entirely)
 ahvs data_analyst --data data.csv --modules eda,class_balance,text_stats
 
 # With explicit column hints
@@ -131,6 +153,27 @@ ahvs data_analyst --data absa.parquet --label sentiment --inputs review_text
 
 # Quick profile of a large file
 ahvs data_analyst --data big_dataset.parquet --nrows 1000 --modules eda
+```
+
+### Claude Code Skills
+
+The `/ahvs_data_analyst` skill provides a conversational interface in Claude Code. It collects your data path and goal, runs the pipeline with ACP by default, and presents findings interactively.
+
+```
+/ahvs_data_analyst
+```
+
+The `/ahvs_data_analyst:gui` subcommand opens an existing analysis report in the browser as a styled HTML page with embedded figures and dark theme.
+
+```
+/ahvs_data_analyst:gui path/to/analysis_report.md
+```
+
+Or via CLI:
+
+```bash
+ahvs data_analyst --view analysis_20260408/analysis_report.md
+ahvs data_analyst --view analysis_20260408/   # auto-finds analysis_report.md
 ```
 
 ## 5. Python API
@@ -150,6 +193,44 @@ report = analyze(
 
 print(f"Completeness: {report.completeness_score():.0f}%")
 print(f"Report: {report.markdown_path}")
+```
+
+### With ACP (Claude Code / Codex)
+
+```python
+from ahvs.data_analyst import analyze
+from ahvs.llm.acp_client import ACPClient, ACPConfig
+
+client = ACPClient(ACPConfig(
+    agent="claude",
+    session_name="ahvs-data-analyst",
+))
+
+report = analyze(
+    data_path="data.csv",
+    goal="build intent classifier",
+    llm_client=client,
+    output_dir="analysis_output/",
+)
+```
+
+### With Anthropic API
+
+```python
+from ahvs.data_analyst import analyze
+from ahvs.llm.client import LLMClient, LLMConfig
+
+client = LLMClient(LLMConfig(
+    base_url="https://api.anthropic.com",
+    api_key="your-key",
+    primary_model="claude-opus-4-6",
+))
+
+report = analyze(
+    data_path="data.csv",
+    goal="build intent classifier",
+    llm_client=client,
+)
 ```
 
 ### Phase-by-phase access
