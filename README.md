@@ -414,6 +414,13 @@ Your only manual step is clicking checkboxes in the browser. For fully automatic
 
 ## 6. Quick Start
 
+### Prerequisites
+
+- Python 3.11+
+- git
+- **API mode:** An API key for a Claude model (or any OpenAI-compatible endpoint)
+- **ACP mode:** A local ACP-compatible agent CLI (Claude Code, Codex, etc.) + `acpx`
+
 ### Installation
 
 **One-command install** (from cloned repo):
@@ -444,12 +451,50 @@ git pull && pip install -e .   # reinstall package
 ahvs update                    # refresh skills in ~/.claude/skills/
 ```
 
-### Prerequisites
+### Dependencies
 
-- Python 3.11+
-- git
-- **API mode:** An API key for a Claude model (or any OpenAI-compatible endpoint)
-- **ACP mode:** A local ACP-compatible agent CLI (Claude Code, Codex, etc.) + `acpx`
+All dependencies are managed in `pyproject.toml`. The base install includes everything needed for the core AHVS pipeline and the data analyst (lexical dedup mode).
+
+#### Core dependencies (always installed)
+
+| Package | Version | Used by |
+|---------|---------|---------|
+| `pyyaml` | >=6.0 | Prompt templates, domain packs, dedup config |
+| `pandas` | >=2.0 | Data analyst profiling, all analysis modules |
+| `numpy` | >=1.24 | Numeric operations in EDA, class balance, dedup |
+| `matplotlib` | >=3.7 | Visualization in EDA, class balance, text stats |
+| `datasketch` | >=1.6 | MinHash LSH for lexical deduplication |
+
+#### Optional dependency groups
+
+Install optional groups with `pip install .[group-name]`:
+
+```bash
+# Semantic dedup (sentence-transformers + DBSCAN — needed for --dedup-mode semantic/hybrid)
+pip install -e ".[semantic-dedup]"
+
+# Stratified train/val/test splitting (scikit-learn)
+pip install -e ".[split]"
+
+# Anthropic API provider (httpx)
+pip install -e ".[anthropic]"
+
+# Everything
+pip install -e ".[all]"
+
+# Development (all + pytest)
+pip install -e ".[dev]"
+```
+
+| Group | Packages | When needed |
+|-------|----------|-------------|
+| `semantic-dedup` | `sentence-transformers>=2.0`, `scikit-learn>=1.0`, `torch>=2.0` | `--dedup-mode semantic` or `--dedup-mode hybrid` in data analyst |
+| `split` | `scikit-learn>=1.0` | `split` module (stratified train/val/test) |
+| `anthropic` | `httpx>=0.24` | `--provider anthropic` (direct Anthropic API) |
+| `all` | All of the above | Full functionality |
+| `dev` | `all` + `pytest>=7.0` | Running tests |
+
+> **GPU note:** The `semantic-dedup` group installs PyTorch. For GPU acceleration (recommended for datasets >10K rows), ensure CUDA is available. The semantic dedup module auto-detects GPU and falls back to CPU. To force CPU: set `device: cpu` in `ahvs/data_analyst/configs/dedup_config.yaml`.
 
 AHVS supports two LLM modes for its own orchestration calls (hypothesis generation, validation planning, reporting):
 

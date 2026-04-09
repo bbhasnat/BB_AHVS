@@ -35,7 +35,7 @@ Use data analyst when you need to understand your data before building a model:
 | Building a classifier | Detects labels, computes imbalance ratio, suggests subsampling or augmentation |
 | Large dataset, need a subset | Selects a representative subsample using stratified, balanced, or diversity strategies |
 | Preparing train/val/test splits | Produces stratified splits with configurable ratios |
-| Checking for duplicates | Detects exact and fuzzy (MinHash LSH) duplicates in text data |
+| Checking for duplicates | Detects and removes duplicates — lexical (MinHash LSH), semantic (embeddings + DBSCAN), or hybrid |
 | Exporting processed data | Writes filtered/subsampled data to CSV, Parquet, JSON, or JSONL |
 
 Data analyst runs at **any point** in the AHVS lifecycle — before genesis, during onboarding, or between optimization cycles. It does not modify your data; it produces analysis reports and optional output files.
@@ -90,7 +90,7 @@ Seven modules ship with v1. Each is independently runnable and follows a standar
 | **eda** | Descriptive statistics, dtype breakdown, missing values, encoding issues, numeric histograms, categorical bar charts | No | Yes |
 | **class_balance** | Class counts, percentages, imbalance ratio, Shannon entropy, distribution bar chart | Yes | Yes |
 | **text_stats** | Character/word length distributions, vocabulary size, duplicates, empty texts, per-class breakdown | No (enhanced with label) | Yes |
-| **duplicates** | Exact duplicate detection (all columns) + fuzzy MinHash LSH deduplication on text columns | No | No |
+| **duplicates** | Three dedup modes: *lexical* (MinHash LSH), *semantic* (sentence-transformers + DBSCAN), *hybrid* (lexical then semantic). Configurable via `dedup_config.yaml` or `--dedup-mode` | No | No |
 | **subsample** | Intelligent data selection: stratified, class-balanced, diversity, or random sampling | No (enhanced with label) | No |
 | **split** | Train/val/test split with configurable ratios and stratification | No (stratified with label) | No |
 | **export** | Save dataset to CSV, Parquet, JSON, or JSONL with optional column selection and filtering | No | No |
@@ -117,6 +117,7 @@ ahvs data_analyst [options]
 | `--nrows` | *(all)* | Limit rows for quick profiling (full data still used for execution) |
 | `--verbose`, `-v` | off | Enable verbose logging |
 | `--view` | *(none)* | Path to `analysis_report.md` or output directory — opens report in browser instead of running analysis |
+| `--dedup-mode` | *(from config)* | Deduplication mode: `lexical` (MinHash LSH), `semantic` (embeddings + DBSCAN), or `hybrid` (both) |
 
 #### LLM Provider Flags
 
@@ -153,6 +154,12 @@ ahvs data_analyst --data absa.parquet --label sentiment --inputs review_text
 
 # Quick profile of a large file
 ahvs data_analyst --data big_dataset.parquet --nrows 1000 --modules eda
+
+# Hybrid dedup (lexical + semantic) — catches paraphrases
+ahvs data_analyst --data social_media.parquet --inputs text --dedup-mode hybrid
+
+# Semantic-only dedup with custom threshold
+ahvs data_analyst --data articles.csv --inputs body --dedup-mode semantic
 ```
 
 ### Claude Code Skills
@@ -189,6 +196,7 @@ report = analyze(
     label_hint="sentiment",
     input_hint=["review_text"],
     output_dir="analysis_output/",
+    dedup_mode="hybrid",  # or "lexical", "semantic"
 )
 
 print(f"Completeness: {report.completeness_score():.0f}%")
@@ -339,6 +347,54 @@ report = analyze(
 # downstream modules automatically receive the subsampled data
 ```
 
+## 7b. Deduplication Modes
+
+The `duplicates` module supports three dedup strategies, configurable via `--dedup-mode` or `ahvs/data_analyst/configs/dedup_config.yaml`.
+
+| Mode | Algorithm | Speed | Catches |
+|------|-----------|-------|---------|
+| **lexical** (default) | MinHash LSH (Jaccard similarity on whitespace tokens) | Fast (~90s for 96K rows) | Near-identical texts (retweets, copy-paste) |
+| **semantic** | Sentence-transformer embeddings + DBSCAN (cosine distance) | Moderate (~80s with GPU) | Paraphrases and semantic near-duplicates |
+| **hybrid** | Lexical first, then semantic on survivors | Slower (~180s) | Both lexical and semantic duplicates |
+
+### Configuration
+
+All parameters live in `ahvs/data_analyst/configs/dedup_config.yaml`:
+
+```yaml
+dedup_mode: lexical        # lexical | semantic | hybrid
+deduplicate: true          # false = report only, don't remove
+
+lexical:
+  lsh_threshold: 0.85      # Jaccard similarity (higher = stricter)
+  lsh_num_perm: 128        # MinHash permutations (higher = more accurate)
+
+semantic:
+  embedding_model: paraphrase-multilingual-MiniLM-L12-v2
+  eps: 0.15                # DBSCAN cosine distance (lower = stricter)
+  min_samples: 2
+  batch_size: 64
+  device: auto             # auto | cpu | cuda
+
+hybrid:
+  skip_semantic_if_lexical_removed_pct: 100
+```
+
+CLI override: `ahvs data_analyst --data file.parquet --dedup-mode hybrid`
+
+Param override: `params={"dedup_mode": "semantic", "eps": 0.2}`
+
+### Output artifacts
+
+```
+duplicates/
+├── deduplicated.parquet      # Cleaned dataset (when deduplicate=true)
+├── duplicate_groups.json     # Audit trail: group memberships + config used
+└── embeddings_text.npy       # Saved embeddings (semantic/hybrid only)
+```
+
+The deduplication module sets `transformed_df`, so all downstream modules (subsample, split, export) automatically operate on the deduplicated data.
+
 ## 8. Report Output
 
 Every analysis run produces a timestamped output directory:
@@ -356,6 +412,9 @@ analysis_20260408_143022/
 +-- text_stats/
 |   +-- word_dist_review_text.png
 +-- duplicates/
+|   +-- deduplicated.parquet
+|   +-- duplicate_groups.json
+|   +-- embeddings_text.npy         (semantic/hybrid only)
 +-- split/
 |   +-- train.parquet
 |   +-- val.parquet
@@ -438,7 +497,7 @@ registry.register("my_module", my_custom_run)
 
 | Version | Scope |
 |---------|-------|
-| **v1 (current)** | Profiling, EDA, class balance, text stats, duplicates, subsample, split, export |
+| **v1 (current)** | Profiling, EDA, class balance, text stats, duplicates (lexical/semantic/hybrid), subsample, split, export |
 | **v2** | Synthetic text generation (augment), correlation analysis, outlier detection, uncertainty sampling |
 | **v3** | CV support, regression tasks, NER, multi-file datasets |
 | **v4** | Active learning loops with AHVS cycle integration |

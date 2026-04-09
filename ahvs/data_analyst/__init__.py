@@ -44,6 +44,7 @@ def analyze(
     input_hint: list[str] | None = None,
     nrows: int | None = None,
     llm_client: Any | None = None,
+    dedup_mode: str | None = None,
 ) -> AnalysisReport:
     """Run the full 4-phase analysis pipeline.
 
@@ -57,6 +58,8 @@ def analyze(
         input_hint: Force specific columns as inputs.
         nrows: Limit rows for quick profiling.
         llm_client: Optional LLM client for Phase 2 planning.
+        dedup_mode: Deduplication mode — ``lexical``, ``semantic``, or ``hybrid``.
+            If None, uses default from ``dedup_config.yaml``.
 
     Returns:
         AnalysisReport with paths to markdown/JSON reports and all artifacts.
@@ -98,6 +101,12 @@ def analyze(
 
     p = Path(data_path).resolve()
     df = _load_data(p, _detect_format(p))
+
+    # Inject dedup_mode into duplicates module params if specified
+    if dedup_mode:
+        for spec in analysis_plan.modules:
+            if spec.name == "duplicates":
+                spec.params["dedup_mode"] = dedup_mode
 
     # Phase 3: Execute
     logger.info("Phase 3: Executing %d modules", len(analysis_plan.modules))

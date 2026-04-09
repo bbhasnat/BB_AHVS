@@ -2,11 +2,12 @@
 name: ahvs_data_analyst
 description: >-
   Goal-directed ML data analysis — profiles datasets, detects quality issues,
-  runs EDA / class balance / text stats / duplicates / subsampling / splits,
-  and produces a markdown report with actionable recommendations. Use this skill
-  when the user says "analyze my data", "profile this dataset", "check data
-  quality", "run EDA", "data analysis", "data readiness", or asks about class
-  balance, duplicates, text statistics, or train/test splits for a dataset.
+  runs EDA / class balance / text stats / duplicates (lexical, semantic, or hybrid) /
+  subsampling / splits, and produces a markdown report with actionable recommendations.
+  Use this skill when the user says "analyze my data", "profile this dataset",
+  "check data quality", "run EDA", "data analysis", "data readiness", "deduplicate",
+  "dedup", "near-duplicate", or asks about class balance, duplicates, text statistics,
+  or train/test splits for a dataset.
 ---
 
 # AHVS Data Analyst
@@ -55,6 +56,7 @@ Ask the user for these values (only `data_path` is required):
 | `data_path` | Yes | — | Path to CSV, Parquet, JSON, or JSONL file |
 | `goal` | No | "general data analysis" | Natural-language goal (e.g., "build intent classifier") |
 | `modules` | No | auto-selected | Comma-separated: eda, class_balance, text_stats, duplicates, subsample, split, export |
+| `dedup_mode` | No | from config | Deduplication mode: `lexical`, `semantic`, or `hybrid` |
 | `output_dir` | No | `analysis_<timestamp>/` | Where to write results |
 | `label` | No | auto-detected | Force a specific column as the label |
 | `inputs` | No | auto-detected | Comma-separated input column names |
@@ -81,6 +83,7 @@ ahvs data_analyst \
   [--label <label>] \
   [--inputs <inputs>] \
   [--nrows <nrows>] \
+  [--dedup-mode <lexical|semantic|hybrid>] \
   --verbose
 ```
 
@@ -130,4 +133,5 @@ Use Option B when:
 - If user provides `--modules`, those override LLM planning entirely
 - Never auto-generate the output path — if not provided, let the CLI default to `analysis_<timestamp>/`
 - For large files (>100k rows), suggest `--nrows 5000` for a quick first pass
+- When user asks about deduplication, offer the three modes: `lexical` (fast), `semantic` (catches paraphrases), `hybrid` (both). Default config is in `ahvs/data_analyst/configs/dedup_config.yaml`
 - Present the report findings conversationally — don't just dump the raw report

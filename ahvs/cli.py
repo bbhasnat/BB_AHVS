@@ -664,6 +664,13 @@ def cmd_data_analyst(argv: list[str]) -> int:
         help="ACP per-prompt timeout in seconds (default: 1800). Only used with --provider acp.",
     )
 
+    # ── Deduplication mode ──────────────────────────────────────────────
+    parser.add_argument(
+        "--dedup-mode", default=None,
+        choices=["lexical", "semantic", "hybrid"],
+        help="Deduplication mode (default: from dedup_config.yaml, usually 'lexical').",
+    )
+
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -701,6 +708,7 @@ def cmd_data_analyst(argv: list[str]) -> int:
         input_hint=input_list,
         nrows=args.nrows,
         llm_client=llm_client,
+        dedup_mode=args.dedup_mode,
     )
 
     print(f"\nAnalysis complete. Completeness: {report.completeness_score():.0f}%")
