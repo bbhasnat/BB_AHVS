@@ -506,7 +506,7 @@ def _generate_files_with_claude_code(
         result = subprocess.run(
             [
                 claude_bin, "-p",
-                "--model", "sonnet",
+                "--model", "opus",
                 "--output-format", "json",
                 "--system-prompt", system_prompt,
                 "--allowedTools", "Read", "Edit", "Glob", "Grep", "Bash(git diff:*)",
