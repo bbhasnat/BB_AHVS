@@ -80,9 +80,23 @@ When asking the user which mode to use, explain:
   your problem description and runs the KD pipeline directly. You need to know
   your classification classes upfront.
 
-- **Agent mode**: Smarter but slower. Uses the KD Agent (claude-agent-sdk) to
-  inspect your data, discover classes, generate optimal config, and drive all
-  pipeline stages. Better for unfamiliar datasets.
+- **Agent mode** (DEPRECATED): Spawns a separate claude-agent-sdk process that
+  incurs per-call API charges. Use the `/kd` skill instead — it provides the
+  same interactive, data-aware experience within the ACP subscription at no
+  extra cost.
+
+### Recommended: `/kd` Skill for Interactive Labeling
+
+When the user wants **interactive, stage-by-stage control** over the KD pipeline (data exploration, spec review, prompt selection, annotation quality review), **always recommend the `/kd` skill over genesis agent mode**. The `/kd` skill:
+- Runs within the ACP subscription — **no extra API cost** for orchestration
+- Investigates data first (detects columns, existing labels, ground truth)
+- Shows browser GUI gates at each stage on port 8765
+- Lets the user review and approve every decision
+- Works from any repository (installed globally via KD's `./install.sh`)
+
+**Use genesis `--mode pipeline`** when the goal is programmatic baseline creation for AHVS.
+**Use `/kd`** when the goal is interactive data labeling with human review.
+**Never use `--mode agent`** — it costs API money that `/kd` avoids.
 
 ## Workflow
 
