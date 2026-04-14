@@ -262,6 +262,9 @@ class HypothesisWorktree:
         # subdirectory of the git root (the worktree is always rooted at the
         # git root, so eval_command must cd into the subdir before running).
         self.eval_cwd: Path = worktree_path
+        # Stored by create() so restore_data_symlinks() can re-run without
+        # recomputing the git root.
+        self._git_root: Path | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -330,6 +333,7 @@ class HypothesisWorktree:
                 f"Is it inside a git repository?"
             )
         git_root = Path(git_root_result.stdout.strip()).resolve()
+        self._git_root = git_root
         repo_resolved = self.repo_path.resolve()
         is_subdir = repo_resolved != git_root
         subdir = None
@@ -403,6 +407,18 @@ class HypothesisWorktree:
         # only contain tracked files — without this, evals that read
         # gitignored data (e.g. parquet checkpoints) will crash.
         self._symlink_untracked_dirs(git_root, self.worktree_path)
+
+    def restore_data_symlinks(self) -> None:
+        """Re-create symlinks for untracked data directories.
+
+        Operations like ``git clean -fd`` remove untracked entries from
+        the worktree, including the symlinks that :meth:`create` set up
+        for gitignored data directories (checkpoints, ground-truth, etc.).
+        Call this method after any ``git clean`` to restore them so that
+        eval commands can still access the data files.
+        """
+        if self._git_root is not None:
+            self._symlink_untracked_dirs(self._git_root, self.worktree_path)
 
     def read_file(self, relpath: str) -> str | None:
         """Read a file from the worktree by repo-relative path.

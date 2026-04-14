@@ -2395,6 +2395,11 @@ def _run_single_hypothesis(
             worktree_path=worktree.worktree_path,
         )
 
+        # Restore symlinks for gitignored data directories (checkpoints,
+        # ground-truth, etc.) — git clean -fd inside Claude Code generation
+        # removes untracked entries including these symlinks.
+        worktree.restore_data_symlinks()
+
         # Write generated files to work_dir (with path validation)
         from ahvs.worktree import validate_safe_relpath
 
