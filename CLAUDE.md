@@ -151,6 +151,37 @@ A live-only report disappears when the server stops, the port is reused, or the 
 - If a live GUI is shown, the equivalent static file must already be on disk
 - Markdown copies go into git; HTML copies render in browsers
 
+## Demo Notebook (required deliverable)
+
+Every completed project (model trained, system built, algorithm shipped) must ship a `demo/` directory showing concrete usage.
+
+### Structure
+
+```
+<project>/demo/
+├── README.md                  # prerequisites, examples covered, how to run
+├── demo_<project>.ipynb       # Jupyter — cell-by-cell
+└── demo_<project>.py          # Script — same examples, runnable end-to-end
+```
+
+### Required examples
+
+Cover at minimum:
+- The happy path (primary use case)
+- Edge cases (empty output, absence, ambiguity)
+- Generalization if the system was trained to generalize
+- Batch / parallel inference pattern
+- Loading your own data
+
+### Rules
+
+- **Verify it runs.** Actually execute the demo script before declaring the project done.
+- Both files share helper functions (`analyze`, `pretty`, etc.) — dedup with imports or copy-paste
+- Script version runs end-to-end in under a minute
+- Self-contained — load API keys safely (per-line .env), load system prompts from committed artifacts
+
+Reference exemplar: `/home/ubuntu/vision/AEBSA/demo/`
+
 ## Credential Hygiene (mandatory)
 
 Secrets must never appear in conversation logs, terminal output, or temp files.
