@@ -5,6 +5,7 @@ dist/
 build/
 .venv/
 .env
+.databricks.env
 .env.*
 *.secret
 .code_review/
