@@ -1,0 +1,73 @@
+# ---------------------------------------------------------------------------
+# AHVS Data Analyst — Deduplication Configuration
+# ---------------------------------------------------------------------------
+#
+# Three modes:
+#   lexical  — MinHash LSH (fast, token-overlap, default)
+#   semantic — Sentence-transformer embeddings + DBSCAN (catches paraphrases)
+#   hybrid   — Lexical first, then semantic on survivors
+#
+# Override via CLI:  ahvs data_analyst --data ... -p dedup_mode=hybrid
+# Or edit this file to change defaults.
+# ---------------------------------------------------------------------------
+
+# Which dedup pipeline to run.  One of: lexical | semantic | hybrid
+dedup_mode: lexical
+
+# Whether to actually remove duplicates (True) or just report them (False).
+deduplicate: true
+
+# ---------------------------------------------------------------------------
+# Lexical deduplication (MinHash LSH)
+# ---------------------------------------------------------------------------
+lexical:
+  # Jaccard similarity threshold.  Higher = stricter (fewer removals).
+  #   0.85 — near-identical texts (retweets, copy-paste)
+  #   0.70 — moderate overlap
+  #   0.50 — loose (aggressive dedup)
+  lsh_threshold: 0.85
+
+  # Number of MinHash permutations.  Higher = more accurate but slower.
+  lsh_num_perm: 128
+
+# ---------------------------------------------------------------------------
+# Semantic deduplication (sentence-transformers + DBSCAN)
+# ---------------------------------------------------------------------------
+semantic:
+  # Sentence-transformer model for encoding.
+  #   paraphrase-multilingual-MiniLM-L12-v2 — multilingual, 384-dim
+  #   all-MiniLM-L6-v2                      — English-optimised, faster
+  embedding_model: paraphrase-multilingual-MiniLM-L12-v2
+
+  # DBSCAN eps (cosine distance).  Lower = stricter.
+  #   0.15 — high similarity required (safe dedup)
+  #   0.30 — moderate (catches looser paraphrases)
+  eps: 0.15
+
+  # Minimum samples for a DBSCAN core point.
+  min_samples: 2
+
+  # Encoding batch size (rows per GPU/CPU batch).
+  batch_size: 64
+
+  # Device selection: auto | cpu | cuda
+  #   auto — uses GPU if available, falls back to CPU
+  device: auto
+
+  # Maximum cluster size before recursive splitting (null = disabled).
+  max_cluster_size: null
+
+  # Tighter eps multiplier when splitting oversized clusters.
+  split_eps_factor: 0.7
+
+# ---------------------------------------------------------------------------
+# Hybrid mode settings
+# ---------------------------------------------------------------------------
+# Hybrid runs lexical first (cheap pass to remove obvious duplicates),
+# then semantic on the survivors (expensive pass to catch paraphrases).
+# Parameters for each stage are taken from the lexical / semantic sections
+# above.  The only hybrid-specific setting is below.
+hybrid:
+  # Skip semantic pass if lexical already removed >= this % of rows.
+  # Set to 100 to always run both passes.
+  skip_semantic_if_lexical_removed_pct: 100

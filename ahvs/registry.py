@@ -103,8 +103,20 @@ def update_last_cycle(repo_path: Path, cycle_id: str) -> None:
             _save(data)
             return
 
-    # Not registered yet — register with defaults then update
-    register(repo_path)
+    # Not registered yet — read baseline_metric.json for rich registration
+    metric_name: str | None = None
+    metric_val: float | None = None
+    baseline_path = repo_path / ".ahvs" / "baseline_metric.json"
+    if baseline_path.exists():
+        try:
+            bm = json.loads(baseline_path.read_text(encoding="utf-8"))
+            metric_name = bm.get("primary_metric")
+            if metric_name and metric_name in bm:
+                metric_val = float(bm[metric_name])
+        except (json.JSONDecodeError, OSError, ValueError, TypeError):
+            pass
+
+    register(repo_path, primary_metric=metric_name, baseline_value=metric_val)
     data = _load()
     for _name, entry in data["repos"].items():
         if Path(entry["path"]).resolve() == repo_path:

@@ -205,9 +205,25 @@ def splice_functions(original_src: str, partial_src: str) -> str:
         for i, imp_line in enumerate(new_import_lines):
             result_lines.insert(last_import_line + i, imp_line)
 
-    # Append new definitions at the end
+    # Append new definitions — but BEFORE any `if __name__ == "__main__":`
+    # block.  When new functions are placed after __main__, Python calls
+    # main() before the new definitions are executed → NameError.
+    # Search result_lines (not orig_tree) because prior replacements may
+    # have shifted line numbers.
     if appends:
-        result_lines.extend(appends)
+        main_guard_line: int | None = None
+        for i, line in enumerate(result_lines):
+            stripped = line.strip()
+            if stripped.startswith("if __name__") and "__main__" in stripped:
+                main_guard_line = i
+                break
+        if main_guard_line is not None:
+            # Insert before the __main__ guard (with a blank line separator)
+            insert_block = ["\n"] + appends + ["\n"]
+            for i, line_to_insert in enumerate(insert_block):
+                result_lines.insert(main_guard_line + i, line_to_insert)
+        else:
+            result_lines.extend(appends)
 
     merged = "".join(result_lines)
 
@@ -246,6 +262,9 @@ class HypothesisWorktree:
         # subdirectory of the git root (the worktree is always rooted at the
         # git root, so eval_command must cd into the subdir before running).
         self.eval_cwd: Path = worktree_path
+        # Stored by create() so restore_data_symlinks() can re-run without
+        # recomputing the git root.
+        self._git_root: Path | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -314,6 +333,7 @@ class HypothesisWorktree:
                 f"Is it inside a git repository?"
             )
         git_root = Path(git_root_result.stdout.strip()).resolve()
+        self._git_root = git_root
         repo_resolved = self.repo_path.resolve()
         is_subdir = repo_resolved != git_root
         subdir = None
@@ -387,6 +407,18 @@ class HypothesisWorktree:
         # only contain tracked files — without this, evals that read
         # gitignored data (e.g. parquet checkpoints) will crash.
         self._symlink_untracked_dirs(git_root, self.worktree_path)
+
+    def restore_data_symlinks(self) -> None:
+        """Re-create symlinks for untracked data directories.
+
+        Operations like ``git clean -fd`` remove untracked entries from
+        the worktree, including the symlinks that :meth:`create` set up
+        for gitignored data directories (checkpoints, ground-truth, etc.).
+        Call this method after any ``git clean`` to restore them so that
+        eval commands can still access the data files.
+        """
+        if self._git_root is not None:
+            self._symlink_untracked_dirs(self._git_root, self.worktree_path)
 
     def read_file(self, relpath: str) -> str | None:
         """Read a file from the worktree by repo-relative path.

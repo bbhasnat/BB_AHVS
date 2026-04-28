@@ -1,11 +1,18 @@
 """KD Classifier solver — bridges AHVS genesis to the KD pipeline.
 
-Supports two execution modes:
-  - **pipeline** (Option A): Direct call to ``run_auto_ml_pipeline()`` via
+Execution modes:
+  - **pipeline** (default): Direct call to ``run_auto_ml_pipeline()`` via
     subprocess.  Requires pre-built config + spec YAML.  Deterministic.
-  - **agent** (Option B): Drives the KD Agent (claude-agent-sdk) which
-    inspects the data, generates spec/config, and runs all stages
-    autonomously.  Smarter but requires ``claude-agent-sdk``.
+  - **agent** (DEPRECATED — use /kd skill instead): Drives the KD Agent
+    (claude-agent-sdk) which spawns a *separate* agent process, incurring
+    per-call API charges.  The ``/kd`` Claude Code skill provides the same
+    interactive, data-aware experience within the ACP subscription at no
+    extra cost.
+
+Recommended usage:
+  - **Programmatic baseline creation** → ``mode=pipeline`` (this solver)
+  - **Interactive labeling with human review** → ``/kd`` skill in Claude Code
+    (runs under ACP subscription, browser GUI gates, no extra API cost)
 
 The mode is selected via ``config_overrides["mode"]`` (default: ``"pipeline"``).
 """
@@ -41,12 +48,13 @@ _VALID_MODES = ("pipeline", "agent")
 class KDClassifierSolver:
     """Build a text classifier via the KD (Knowledge Distillation) pipeline.
 
-    Supports two modes:
-      - ``pipeline``: generates spec/config YAML, calls ``run_auto_ml_pipeline``
-        via subprocess.  Reliable, deterministic.
-      - ``agent``: uses the KD Agent (claude-agent-sdk) to inspect data,
-        auto-generate spec/config, and drive the full pipeline.  Smarter
-        (adapts to data), but requires ``claude-agent-sdk``.
+    Modes:
+      - ``pipeline`` (recommended): generates spec/config YAML, calls
+        ``run_auto_ml_pipeline`` via subprocess.  Reliable, deterministic.
+      - ``agent`` (deprecated): spawns a separate KD Agent process via
+        claude-agent-sdk.  Use the ``/kd`` Claude Code skill instead —
+        it runs within the ACP subscription at no extra cost and provides
+        browser GUI gates for human review.
     """
 
     name: str = "kd_classifier"
@@ -112,6 +120,16 @@ class KDClassifierSolver:
 
         # Dispatch to the selected mode
         if mode == "agent":
+            import warnings
+            warnings.warn(
+                "Genesis agent mode is deprecated — it spawns a separate "
+                "claude-agent-sdk process that incurs per-call API charges. "
+                "Use the /kd Claude Code skill instead (runs within ACP "
+                "subscription at no extra cost). For programmatic use, "
+                "prefer mode='pipeline'.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
             result = self._run_agent(kd_path, problem, data, output, target_metric, overrides)
         else:
             result = self._run_pipeline_mode(kd_path, problem, data, output, target_metric, overrides)

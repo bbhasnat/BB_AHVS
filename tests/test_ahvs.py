@@ -1385,6 +1385,14 @@ class TestPreflightProviderAware:
 class TestMakeLlmClientUsesFactory:
     """Tests for _make_llm_client routing through the shared factory."""
 
+    @staticmethod
+    def _unwrap(client):
+        """Unwrap CachedClientWrapper to get the underlying client."""
+        from ahvs.llm.cache import CachedClientWrapper
+        if isinstance(client, CachedClientWrapper):
+            return client._client
+        return client
+
     def test_anthropic_provider_returns_llm_client(self, tmp_path: Path) -> None:
         """provider=anthropic should produce an LLMClient (not ACPClient)."""
         from ahvs.executor import _make_llm_client
@@ -1400,7 +1408,7 @@ class TestMakeLlmClientUsesFactory:
         with patch("ahvs.llm.anthropic_adapter.HAS_HTTPX", True), \
              patch("ahvs.llm.anthropic_adapter.AnthropicAdapter.__init__", return_value=None):
             client = _make_llm_client(config)
-        assert isinstance(client, LLMClient)
+        assert isinstance(self._unwrap(client), LLMClient)
 
     def test_acp_provider_returns_acp_client(self, tmp_path: Path) -> None:
         """provider=acp should produce an ACPClient."""
@@ -1485,6 +1493,14 @@ class TestPreflightUsesSharedFactory:
 class TestProviderMatrixFactory:
     """Fix #5 (v4): verify the factory produces correct clients for openai/openrouter."""
 
+    @staticmethod
+    def _unwrap(client):
+        """Unwrap CachedClientWrapper to get the underlying client."""
+        from ahvs.llm.cache import CachedClientWrapper
+        if isinstance(client, CachedClientWrapper):
+            return client._client
+        return client
+
     def test_openai_provider_returns_llm_client(self, tmp_path: Path) -> None:
         from ahvs.executor import _make_llm_client
         from ahvs.llm.client import LLMClient
@@ -1496,9 +1512,10 @@ class TestProviderMatrixFactory:
             llm_model="gpt-4o",
         )
         client = _make_llm_client(config)
-        assert isinstance(client, LLMClient)
+        inner = self._unwrap(client)
+        assert isinstance(inner, LLMClient)
         # Should use the OpenAI preset base_url
-        assert "openai.com" in client.config.base_url
+        assert "openai.com" in inner.config.base_url
 
     def test_openrouter_provider_returns_llm_client(self, tmp_path: Path) -> None:
         from ahvs.executor import _make_llm_client
@@ -1511,8 +1528,9 @@ class TestProviderMatrixFactory:
             llm_model="anthropic/claude-opus-4-6",
         )
         client = _make_llm_client(config)
-        assert isinstance(client, LLMClient)
-        assert "openrouter.ai" in client.config.base_url
+        inner = self._unwrap(client)
+        assert isinstance(inner, LLMClient)
+        assert "openrouter.ai" in inner.config.base_url
 
     def test_openai_shim_base_url_empty_uses_preset(self, tmp_path: Path) -> None:
         """When llm_base_url is empty, the factory should use PROVIDER_PRESETS."""
@@ -1540,8 +1558,9 @@ class TestProviderMatrixFactory:
             llm_api_key="sk-test",
         )
         client = _make_llm_client(config)
-        assert isinstance(client, LLMClient)
-        assert client.config.base_url == "https://custom-proxy.example.com/v1"
+        inner = self._unwrap(client)
+        assert isinstance(inner, LLMClient)
+        assert inner.config.base_url == "https://custom-proxy.example.com/v1"
 
 
 class TestProviderMatrixPreflight:
@@ -3444,8 +3463,9 @@ class TestCleanupCycles:
         bad = self._make_cycle(cycles, "20260325_222024", 1, "failed")
 
         removed = EvolutionStore.cleanup_cycles(cycles)
-        assert "20260325_222024" in removed
-        assert not bad.exists()
+        # cleanup_cycles no longer deletes — only logs candidates
+        assert removed == []
+        assert bad.exists()  # data preserved for manual cleanup
 
     def test_removes_orphan_dirs(self, tmp_path: Path) -> None:
         from ahvs.evolution import EvolutionStore
@@ -3457,8 +3477,8 @@ class TestCleanupCycles:
         # No checkpoint file
 
         removed = EvolutionStore.cleanup_cycles(cycles)
-        assert "test_wt" in removed
-        assert not orphan.exists()
+        assert removed == []
+        assert orphan.exists()  # data preserved for manual cleanup
 
     def test_removes_partial_cycles(self, tmp_path: Path) -> None:
         from ahvs.evolution import EvolutionStore
@@ -3468,8 +3488,8 @@ class TestCleanupCycles:
         partial = self._make_cycle(cycles, "20260325_222114", 6, "done")
 
         removed = EvolutionStore.cleanup_cycles(cycles)
-        assert "20260325_222114" in removed
-        assert not partial.exists()
+        assert removed == []
+        assert partial.exists()  # data preserved for manual cleanup
 
     def test_keeps_recent_complete_cycles(self, tmp_path: Path) -> None:
         from ahvs.evolution import EvolutionStore
@@ -3495,10 +3515,9 @@ class TestCleanupCycles:
         new2 = self._make_cycle(cycles, "20260304_000000", 8, "done")
 
         removed = EvolutionStore.cleanup_cycles(cycles, keep_complete=2)
-        assert "20260301_000000" in removed
-        assert "20260302_000000" in removed
-        assert not old.exists()
-        assert not mid.exists()
+        # No longer deletes — only logs candidates
+        assert removed == []
+        assert old.exists() and mid.exists()
         assert new1.exists() and new2.exists()
 
     def test_keep_complete_zero_preserves_all(self, tmp_path: Path) -> None:
@@ -3527,10 +3546,12 @@ class TestCleanupCycles:
         orphan.mkdir()
 
         removed = EvolutionStore.cleanup_cycles(cycles, keep_complete=3)
-        # Should remove: 2 failed + 2 partial + 1 orphan = 5
-        assert len(removed) == 5
-        # Only the complete cycle survives
+        # No longer deletes — only logs candidates for manual cleanup
+        assert removed == []
+        # All directories preserved
         assert (cycles / "20260325_232853").exists()
+        assert (cycles / "20260325_222024").exists()
+        assert orphan.exists()
 
     def test_handles_nonexistent_dir(self, tmp_path: Path) -> None:
         from ahvs.evolution import EvolutionStore

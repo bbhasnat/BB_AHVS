@@ -14,6 +14,28 @@
 
 ---
 
+## Two Ways to Use KD from AHVS
+
+KD is accessible from any repo through two recommended paths:
+
+| Path | Entry Point | Human in Loop? | API Cost | Best For |
+|------|-------------|----------------|----------|----------|
+| **`/kd` skill** (recommended) | Claude Code: `/kd` or "label my data" | Yes — browser gates at each stage | **None** — runs within ACP subscription | Interactive data labeling, exploration, quality review |
+| **`ahvs genesis --mode pipeline`** | CLI: `ahvs genesis ...` | No — runs end-to-end | OpenAI API for labeling only | Programmatic baseline creation for AHVS optimization cycles |
+
+**`--mode agent` is deprecated.** It spawns a separate claude-agent-sdk process that incurs per-call API charges. The `/kd` skill provides the same interactive, data-aware experience within the ACP subscription at no extra cost.
+
+**When to use which:**
+- **Exploring new data, building a spec, labeling with review?** Use `/kd`. It investigates the data first, generates a spec for your approval, shows annotation examples before full labeling, and pauses at every stage for browser-based review on port 8765. Runs entirely within the ACP subscription — no extra API cost for orchestration.
+- **Creating an AHVS project baseline programmatically?** Use `ahvs genesis --mode pipeline`. It generates spec/config from the problem description and runs the full KD pipeline in one shot, producing `.ahvs/baseline_metric.json`. Only the annotation step (LLM labeling) costs API money.
+- **Already have labeled data and a spec?** Use `/kd` and tell it "I have labeled data, train a model" — it detects ground truth and skips to training.
+
+**Cost principle:** ACP (Claude Code subscription) for all reasoning, orchestration, and decision-making. External LLM API (gpt-4.1-mini) only for bulk annotation/labeling. Never use `--mode agent` — the `/kd` skill does the same thing within the subscription.
+
+The `/kd` skill is installed globally via KD's `./install.sh` to `~/.claude/skills/kd/`. After installation, it is available in Claude Code from any repository — including AHVS, or any target project the user is working in.
+
+---
+
 ## Phase 1: Solver Contract + KD Adapter — DONE (2026-04-05)
 
 **Goal:** Define the solver protocol and build a thin adapter that calls KD's pipeline, producing AHVS-compatible output. No changes to AHVS core.

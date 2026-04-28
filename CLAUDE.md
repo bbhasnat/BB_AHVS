@@ -83,9 +83,146 @@ Skills (`.claude/skills/`) define the full workflow; commands (`.claude/commands
 - `/ahvs_multiagent:gui` — Browser form for multi-agent cycle
 - `/ahvs_genesis` — Creates a new AHVS project from raw data
 - `/ahvs_genesis:gui` — Browser form for genesis
+- `/ahvs_data_analyst` — Goal-directed ML data analysis (profiles, EDA, class balance, text stats, duplicates [lexical/semantic/hybrid], embedding clustering, diversity subsample, split). Auto-escalates to hybrid dedup + clustering for large datasets. GPU required for semantic features; graceful fallback without. Supports `--provider acp` and `--dedup-mode`.
+- `/ahvs_data_analyst:gui` — Browser-based report viewer for data analyst results
 
 ## Tests
 
 ```bash
 pytest tests/test_ahvs.py -v   # 284 tests
 ```
+
+## Project Memory Pattern
+
+For any long-running project (spans multiple sessions), build a `.memory/` directory in the project root — NOT in this framework repo. Mirrors AHVS memory discipline so the same principles apply broadly.
+
+### Structure
+
+```
+<project>/.memory/
+├── MEMORY.md               # index — one-line hook per entry
+├── state/
+│   └── project_state.md    # current truth snapshot; update as project evolves
+├── decisions/
+│   └── NNN-topic.md        # one file per significant choice, with WHY
+├── conversations/
+│   └── NNN-topic.md        # user direction shifts with DIRECT QUOTES
+└── lessons/
+    └── topic.md            # cross-session gotchas, bugs, infrastructure quirks
+```
+
+### When to write
+
+| Trigger | Write into |
+|---|---|
+| Tool / model / scope decision finalized | `decisions/` |
+| User gives direction that shifts the plan | `conversations/` |
+| Discover a non-obvious bug, gotcha, or constraint | `lessons/` |
+| End of a major phase (data prep done, model trained, etc.) | `state/project_state.md` |
+
+### Principles
+
+1. **Write in real time, not at session end.** Conversations evaporate; files persist.
+2. **Every decision must record its why.** Not just "we chose X" but "we chose X because Y."
+3. **Include direct quotes in conversations.** They're ground truth.
+4. **Project memory lives with the project.** Portable across machines; stays when people rotate.
+
+Reference exemplar: `/home/ubuntu/vision/AEBSA/.memory/`.
+
+## Reports Pattern
+
+Every analysis, evaluation, or summary output from Claude or AHVS must be saved to disk as **both HTML and Markdown**, not served only from a running process.
+
+### Why
+
+A live-only report disappears when the server stops, the port is reused, or the browser cache refuses to reload. Files on disk survive.
+
+### How
+
+- Default directory: `<project>/reports/`
+- Include a `reports/README.md` index listing every artifact + description
+- Reusable template: `ahvs.templates.decomposed_analysis_gui` (handles json_array completions)
+  - `save_reports(csv, output_dir, name=...)` → writes both HTML and MD
+  - `serve_analysis(csv, port=8765)` → optional live GUI on top
+
+### Rules
+
+- Always tell the user the **filename** AND the live URL (not just the URL)
+- If a live GUI is shown, the equivalent static file must already be on disk
+- Markdown copies go into git; HTML copies render in browsers
+
+## Demo Notebook (required deliverable)
+
+Every completed project (model trained, system built, algorithm shipped) must ship a `demo/` directory showing concrete usage.
+
+### Structure
+
+```
+<project>/demo/
+├── README.md                  # prerequisites, examples covered, how to run
+├── demo_<project>.ipynb       # Jupyter — cell-by-cell
+└── demo_<project>.py          # Script — same examples, runnable end-to-end
+```
+
+### Required examples
+
+Cover at minimum:
+- The happy path (primary use case)
+- Edge cases (empty output, absence, ambiguity)
+- Generalization if the system was trained to generalize
+- Batch / parallel inference pattern
+- Loading your own data
+
+### Rules
+
+- **Verify it runs.** Actually execute the demo script before declaring the project done.
+- Both files share helper functions (`analyze`, `pretty`, etc.) — dedup with imports or copy-paste
+- Script version runs end-to-end in under a minute
+- Self-contained — load API keys safely (per-line .env), load system prompts from committed artifacts
+
+Reference exemplar: `/home/ubuntu/vision/AEBSA/demo/`
+
+## Credential Hygiene (mandatory)
+
+Secrets must never appear in conversation logs, terminal output, or temp files.
+
+### Never do
+
+```bash
+# WRONG — prints key to stdout, captured in logs
+env | grep OPENAI_API_KEY
+cat .env
+echo $API_KEY
+
+# WRONG — multi-line capture if .env has multiple vars
+KEY=$(grep OPENAI .env | cut -d= -f2)
+```
+
+### Do instead
+
+```python
+# Existence check without revealing the value
+import os
+print("OPENAI_API_KEY:", "SET" if os.environ.get("OPENAI_API_KEY") else "UNSET")
+
+# Per-line .env parsing
+for line in open(".env"):
+    line = line.strip()
+    if line.startswith("OPENAI_API_KEY="):
+        os.environ["OPENAI_API_KEY"] = line.split("=", 1)[1].strip()
+        break
+
+# Or just use python-dotenv
+from dotenv import load_dotenv
+load_dotenv()
+```
+
+### If a secret leaks
+
+1. Flag it **immediately** in the conversation so the user can rotate
+2. Sweep `/tmp/`, task output dirs, and log files for the leaked value
+3. Note the incident in project `.memory/lessons/credential-hygiene.md`
+
+### Why
+
+Accidents happen — tool outputs are captured in conversation history that may be retained and indexed. The cost of a leak is high (revocation + audit); the cost of defensive habits is zero.

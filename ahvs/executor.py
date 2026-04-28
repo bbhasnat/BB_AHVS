@@ -438,6 +438,14 @@ def _generate_files_with_claude_code(
         and "__pycache__" not in p.parts
         and ".git" not in p.parts
     )
+    # Include the eval entry point even if it lives under .ahvs/ —
+    # without this, Claude Code can't see the eval script in the
+    # file listing and may search outside the worktree to find it.
+    eval_entry = _find_eval_entry_script(eval_command)
+    if eval_entry and eval_entry not in src_files:
+        eval_path = target_dir / eval_entry
+        if eval_path.is_file():
+            src_files.append(eval_entry)
     file_listing = "\n".join(f"- {f}" for f in src_files[:30])
 
     prompt = (
@@ -447,7 +455,9 @@ def _generate_files_with_claude_code(
         f"**Type:** {hyp_type}\n"
         f"**Description:** {description}\n\n"
         f"## Target Repository\n"
-        f"Path: {target_dir}\n\n"
+        f"Path: {target_dir}\n"
+        f"**IMPORTANT: All file reads and edits MUST use paths within this "
+        f"directory. Do NOT access files outside it.**\n\n"
         f"## Existing source files:\n{file_listing}\n\n"
         f"## Eval command (how the metric is measured):\n"
         f"```\n{eval_command}\n```\n\n"
@@ -477,11 +487,26 @@ def _generate_files_with_claude_code(
     )
     print(f"[AHVS] {hyp_id}: using Claude Code for targeted file edit")
 
+    # Ensure the worktree is clean before Claude Code runs — stale edits
+    # from a previous run's apply_files() would confuse Claude Code and
+    # contaminate the git-status file capture.
+    try:
+        subprocess.run(
+            ["git", "checkout", "--", "."],
+            cwd=str(target_dir), capture_output=True, timeout=30,
+        )
+        subprocess.run(
+            ["git", "clean", "-fd"],
+            cwd=str(target_dir), capture_output=True, timeout=30,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     try:
         result = subprocess.run(
             [
                 claude_bin, "-p",
-                "--model", "sonnet",
+                "--model", "opus",
                 "--output-format", "json",
                 "--system-prompt", system_prompt,
                 "--allowedTools", "Read", "Edit", "Glob", "Grep", "Bash(git diff:*)",
@@ -1062,31 +1087,59 @@ def _parse_validation_plan(text: str) -> list[dict]:
 
 def _extract_metric_from_output(raw_output: str, metric_key: str) -> float | None:
     """Try to extract a float metric value from JSON or key:value text output."""
-    # Try JSON parse
-    for line in reversed(raw_output.strip().splitlines()):
+
+    def _navigate(data: Any, key: str) -> float | None:
+        """Navigate a dot-separated key path in a parsed JSON object."""
+        parts = key.split(".")
+        val = data
+        for p in parts:
+            if isinstance(val, dict):
+                val = val.get(p)
+            elif isinstance(val, list) and p.isdigit():
+                idx = int(p)
+                val = val[idx] if idx < len(val) else None
+            else:
+                val = None
+            if val is None:
+                break
+        if isinstance(val, (int, float)):
+            return float(val)
+        return None
+
+    def _try_json(data: dict) -> float | None:
+        """Try metric_key, then AHVS-standard 'metric_value' fallback."""
+        val = _navigate(data, metric_key)
+        if val is not None:
+            return val
+        # AHVS eval scripts emit {"metric_value": <float>} — use as fallback
+        return _navigate(data, "metric_value")
+
+    # 1. Try parsing the entire output as a single JSON object (handles
+    #    multi-line / indented JSON from eval scripts).
+    stripped = raw_output.strip()
+    try:
+        data = json.loads(stripped)
+        if isinstance(data, dict):
+            result = _try_json(data)
+            if result is not None:
+                return result
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # 2. Line-by-line reverse scan for embedded single-line JSON objects
+    #    (handles mixed output where JSON is printed among other text).
+    for line in reversed(stripped.splitlines()):
         line = line.strip()
         if line.startswith("{"):
             try:
                 data = json.loads(line)
-                # Navigate dot-separated key path
-                parts = metric_key.split(".")
-                val: Any = data
-                for p in parts:
-                    if isinstance(val, dict):
-                        val = val.get(p)
-                    elif isinstance(val, list) and p.isdigit():
-                        idx = int(p)
-                        val = val[idx] if idx < len(val) else None
-                    else:
-                        val = None
-                    if val is None:
-                        break
-                if isinstance(val, (int, float)):
-                    return float(val)
+                result = _try_json(data)
+                if result is not None:
+                    return result
             except (json.JSONDecodeError, IndexError, TypeError):
                 pass
 
-    # Try "metric_key: 0.82" pattern
+    # 3. Try "metric_key: 0.82" pattern
     pattern = re.compile(
         rf"{re.escape(metric_key)}\s*[:\s]\s*([+-]?\d+\.?\d*(?:[eE][+-]?\d+)?)",
         re.IGNORECASE,
@@ -2342,6 +2395,11 @@ def _run_single_hypothesis(
             worktree_path=worktree.worktree_path,
         )
 
+        # Restore symlinks for gitignored data directories (checkpoints,
+        # ground-truth, etc.) — git clean -fd inside Claude Code generation
+        # removes untracked entries including these symlinks.
+        worktree.restore_data_symlinks()
+
         # Write generated files to work_dir (with path validation)
         from ahvs.worktree import validate_safe_relpath
 
@@ -2541,6 +2599,56 @@ def _run_single_hypothesis(
                     metric_value = extracted
                     measurement_status = "measured"
 
+        # ── Eval retry: re-apply files without splice and re-run ────
+        # If eval failed and Claude Code produced files, the AST splice
+        # may have produced broken code (silent fallback to original).
+        # Re-apply the raw Claude Code output directly and retry eval.
+        if (
+            measurement_status != "measured"
+            and generated_files
+            and eval_command
+            and worktree is not None
+        ):
+            logger.info(
+                "%s: eval failed after splice — retrying with direct "
+                "file application (no splice).",
+                hyp_id,
+            )
+            print(
+                f"[AHVS] {hyp_id}: eval retry — re-applying files "
+                f"without splice and re-running eval"
+            )
+            try:
+                worktree.apply_files(valid_files, splice=False)
+                eval_timeout = int(
+                    baseline.get("eval_timeout", config.eval_timeout_sec)
+                )
+                eval_result = worktree.run_eval_command(
+                    eval_command, timeout=eval_timeout
+                )
+                if eval_result.returncode == 0:
+                    extracted = _extract_metric_from_output(
+                        eval_result.stdout, metric_name
+                    )
+                    if extracted is not None:
+                        metric_value = extracted
+                        measurement_status = "measured"
+                        logger.info(
+                            "%s: eval RETRY succeeded — %s=%.4f",
+                            hyp_id, metric_name, metric_value,
+                        )
+                else:
+                    logger.warning(
+                        "%s: eval retry also failed (exit %d). stderr: %s",
+                        hyp_id, eval_result.returncode,
+                        eval_result.stderr[:500],
+                    )
+            except Exception as retry_exc:  # noqa: BLE001
+                logger.warning(
+                    "%s: eval retry raised exception: %s",
+                    hyp_id, retry_exc,
+                )
+
         # Extraction failed — log warning, keep baseline
         if measurement_status != "measured":
             measurement_status = "extraction_failed"
@@ -2670,6 +2778,43 @@ def _execute_report_and_memory(
             f"**Results:**\n{results_summary}\n\n"
             f"*Report generation failed: {exc}*"
         )
+
+    # Ensure the report contains the mandatory Final Summary & Findings section.
+    # If the LLM omitted it, append a structured fallback built from raw results.
+    if "Final Summary" not in report_text and "## Results table" not in report_text:
+        summary_table_lines = [
+            "| Hypothesis | Type | Metric | Delta | Verdict |",
+            "|---|---|---|---|---|",
+            f"| Baseline | — | {baseline['value']:.4f} | — | — |",
+        ]
+        for r in results:
+            verdict = "ADOPT" if r.improved else ("ERROR" if r.error else "No improvement")
+            summary_table_lines.append(
+                f"| {r.hypothesis_id} | {r.hypothesis_type} | "
+                f"{r.metric_value:.4f} | {r.delta:+.4f} ({r.delta_pct:+.1f}%) | {verdict} |"
+            )
+        recommendations = []
+        if best_result:
+            recommendations.append(
+                f"| 1 | Apply {best_result.hypothesis_id} "
+                f"({best_result.hypothesis_type}) | "
+                f"{metric_name} +{best_result.delta_pct:.1f}% |"
+            )
+        rec_table = (
+            "| Priority | Action | Expected Impact |\n|---|---|---|\n"
+            + "\n".join(recommendations)
+        ) if recommendations else "No hypotheses improved the metric this cycle."
+
+        summary_section = (
+            "\n\n---\n\n"
+            "## Final Summary & Findings\n\n"
+            f"**Objective:** {config.question}\n\n"
+            "### Results\n\n"
+            + "\n".join(summary_table_lines) + "\n\n"
+            "### Recommendations\n\n"
+            + rec_table + "\n"
+        )
+        report_text += summary_section
 
     (cycle_dir / "report.md").write_text(report_text, encoding="utf-8")
 
