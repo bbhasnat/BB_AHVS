@@ -10,3 +10,4 @@ build/
 *.secret
 .code_review/
 .llm_cache/
+analysis_gaid_v11_mini/
